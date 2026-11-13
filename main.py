@@ -55,7 +55,7 @@ set_korean_font()
 # ---------------------------------------------------------
 @st.cache_data
 def generate_fallback_data():
-    """파일 업로드 전이나 GitHub에 CSV가 없을 때 자동 작동하는 기본 FDS 데이터(1,000행)"""
+    """CSV 미업로드 시 자동 작동하는 기본 FDS 데이터(1,000행)"""
     np.random.seed(42)
     n_normal = 950
     n_fraud = 50
@@ -89,7 +89,6 @@ def generate_fallback_data():
 
 st.sidebar.title("🛡️ FDS 보안 탐지 메뉴")
 
-# ⭐ CSV 파일 직접 업로드 위젯 추가
 st.sidebar.subheader("📂 데이터 파일 업로드")
 uploaded_file = st.sidebar.file_uploader(
     "CSV 파일을 업로드하세요 (선택 사항)", type=["csv"]
@@ -103,9 +102,8 @@ elif os.path.exists("credit_card_fraud_synthetic.csv"):
     st.sidebar.info("📁 저장소의 기본 CSV 파일을 로드했습니다.")
 else:
     df = generate_fallback_data()
-    st.sidebar.warning("⚡ 내장된 샘플 데이터를 사용 중입니다. (CSV 업로드 가능)")
+    st.sidebar.warning("⚡ 내장된 샘플 데이터를 사용 중입니다.")
 
-# 필수 컬럼 검증 및 Hour 파생 변수 생성
 required_cols = {"Time", "V1", "V2", "V3", "V4", "V5", "Amount", "Class"}
 if not required_cols.issubset(set(df.columns)):
     st.error(
@@ -113,6 +111,7 @@ if not required_cols.issubset(set(df.columns)):
     )
     st.stop()
 
+# [수정 반영 ②] EDA 인사이트를 모델링과 연결하기 위해 Hour 파생 변수 생성
 df["Hour"] = (df["Time"] // 3600) % 24
 
 # ---------------------------------------------------------
@@ -152,14 +151,14 @@ if menu == "1. 프로젝트 개요":
     with col1:
         st.subheader("📌 연구 대질문 및 핵심 목표")
         st.info(
-            "**대질문:** 신용카드 결제 거래의 시간대, 결제 금액, 거래 변동 특성($V_1 \\sim V_5$)을 분석하여 "
+            "**대질문:** 신용카드 결제 거래의 시간대(`Hour`), 결제 금액(`Amount`), 거래 변동 특성($V_1 \\sim V_5$)을 분석하여 "
             "극심한 클래스 불균형 속에서도 실제 사기(Fraud) 거래를 효과적으로 탐지할 수 있는가?"
         )
         st.markdown("""
-        **핵심 해결 과제**
-        1. **클래스 불균형 극복:** 전체 데이터 중 사기 거래 비율이 극히 낮은 환경에서 모델이 '모두 정상'으로 편향 학습하는 문제를 `class_weight='balanced'` 옵션으로 해결합니다.
-        2. **설명 가능한 AI(XAI) 적용:** 금융 보안 현장에서 거래 차단 사유를 명확히 설명할 수 있도록 **의사결정나무(Decision Tree)**와 **로지스틱 회귀(Logistic Regression)**를 비교 분석합니다.
-        3. **보안 특화 평가지표 검증:** 단순 정확도(Accuracy)의 함정을 피하고, 실제 사기를 놓치지 않는 **재현율(Recall)**과 **혼동 행렬(Confusion Matrix)**을 중점적으로 검증합니다.
+        **핵심 해결 과제 및 데이터 과학적 설계**
+        1. **데이터 누수(Data Leakage) 방지:** 훈련/테스트 데이터를 먼저 분할한 후 훈련 세트 기준으로만 스케일링을 학습시켜 공정한 성능 평가를 보장합니다.
+        2. **클래스 불균형 극복:** 전체 데이터 중 사기 거래 비율이 극히 낮은 환경에서 `class_weight='balanced'` 옵션으로 소수 클래스 탐지력을 강화합니다.
+        3. **보안 특화 평가지표 검증:** 단순 정확도(Accuracy)의 함정을 피하고, 실제 사기를 놓치지 않는 **재현율(Recall)**과 **혼동 행렬(Confusion Matrix)**을 중점 검증합니다.
         """)
 
     with col2:
@@ -167,17 +166,17 @@ if menu == "1. 프로젝트 개요":
         checklist_df = pd.DataFrame({
             "평가 항목": [
                 "1. 문제 정의의 참신성",
-                "2. 전처리 및 불균형 처리",
+                "2. 전처리 및 누수 방지",
                 "3. 적절한 분류 모델 선정",
                 "4. 논리적 평가 지표 활용",
                 "5. Streamlit 웹앱 완성도",
             ],
             "구현 내용": [
                 "실생활 금융 보안(FDS) 사기 탐지 문제 해결",
-                "RobustScaler 스케일링 및 층화 추출(Stratify)",
+                "Train/Test 분할 후 RobustScaler 적용 & Hour 파생변수 반영",
                 "의사결정나무 & 로지스틱 회귀 (가중치 균형 적용)",
                 "정확도 외 재현율(Recall) 및 혼동 행렬 시각화",
-                "파일 업로더 및 실시간 탐지 시뮬레이터 통합 구현",
+                "파일 업로더 및 원클릭 실시간 시뮬레이터 구현",
             ],
             "완료 여부": ["완료", "완료", "완료", "완료", "완료"],
         })
@@ -189,7 +188,7 @@ if menu == "1. 프로젝트 개요":
 elif menu == "2. EDA & 전처리":
     st.title("📊 탐색적 데이터 분석(EDA) 및 전처리")
 
-    st.subheader("1) 원본 데이터 미리보기 (`df.head()`)")
+    st.subheader("1) 원본 데이터 및 파생 변수(`Hour`) 미리보기")
     st.dataframe(df.head(10), use_container_width=True)
 
     st.markdown(
@@ -228,11 +227,13 @@ elif menu == "2. EDA & 전처리":
         ax1.set_title("정상 vs 사기 거래 건수 비교 (클래스 불균형)")
         ax1.set_ylabel("거래 건수 (건)")
         for i, v in enumerate([normal_count, fraud_count]):
-            ax1.text(i, v + (len(df) * 0.015), f"{v}건", ha="center", fontweight="bold")
+            ax1.text(
+                i, v + (len(df) * 0.015), f"{v}건", ha="center", fontweight="bold"
+            )
         st.pyplot(fig1)
 
     st.divider()
-    st.subheader("3) 거래 금액(Amount) 및 시간대(Time) 패턴 시각화")
+    st.subheader("3) 거래 금액(Amount) 및 시간대(Hour) 패턴 시각화")
     col3, col4 = st.columns(2)
 
     with col3:
@@ -250,7 +251,7 @@ elif menu == "2. EDA & 전처리":
         ax2.set_ylabel("결제 금액 (Amount)")
         st.pyplot(fig2)
         st.caption(
-            "결제 금액의 극단적 이상치(Outlier) 영향을 줄이기 위해 모델 학습 시 RobustScaler를 적용합니다."
+            "결제 금액의 극단적 이상치(Outlier) 영향을 줄이기 위해 훈련 데이터 기준으로 RobustScaler를 적용합니다."
         )
 
     with col4:
@@ -269,7 +270,7 @@ elif menu == "2. EDA & 전처리":
         ax3.set_ylabel("빈도수")
         st.pyplot(fig3)
         st.caption(
-            "시간의 흐름(`Time` 초 단위)을 24시간 주기로 변환하여 시간대별 이상 발생 패턴을 파악합니다."
+            "초 단위 Time을 24시간 주기(Hour) 파생 변수로 변환하여 모델 학습 독립 변수로 직접 활용합니다."
         )
 
 # =========================================================
@@ -278,7 +279,7 @@ elif menu == "2. EDA & 전처리":
 elif menu == "3. 모델 학습 & 평가":
     st.title("⚙️ 분류 모델 학습 및 성능 검증")
     st.markdown(
-        "훈련 데이터와 테스트 데이터를 **층화 추출(Stratified Split)**로 분할하고, 클래스 불균형 보정(`class_weight='balanced'`)을 적용해 성능을 평가합니다."
+        "훈련 데이터와 테스트 데이터를 **층화 추출(Stratified Split)**로 먼저 분할한 뒤 스케일링을 적용해 데이터 누수를 방지합니다."
     )
 
     col_opt1, col_opt2, col_opt3 = st.columns(3)
@@ -303,16 +304,19 @@ elif menu == "3. 모델 학습 & 평가":
             disabled=(model_type != "의사결정나무 (Decision Tree)"),
         )
 
-    feature_cols = ["Time", "V1", "V2", "V3", "V4", "V5", "Amount"]
+    # [수정 반영 ②] EDA에서 도출한 Hour 파생 변수를 독립 변수에 포함
+    feature_cols = ["Hour", "V1", "V2", "V3", "V4", "V5", "Amount"]
     X = df[feature_cols].copy()
     y = df["Class"]
 
-    scaler = RobustScaler()
-    X[["Time", "Amount"]] = scaler.fit_transform(X[["Time", "Amount"]])
-
+    # [수정 반영 ①] 데이터 누수(Data Leakage) 방지를 위해 분할(Split)을 스케일링보다 먼저 수행
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=42, stratify=y
     )
+
+    scaler = RobustScaler()
+    X_train[["Hour", "Amount"]] = scaler.fit_transform(X_train[["Hour", "Amount"]])
+    X_test[["Hour", "Amount"]] = scaler.transform(X_test[["Hour", "Amount"]])
 
     if model_type == "의사결정나무 (Decision Tree)":
         model = DecisionTreeClassifier(
@@ -385,15 +389,15 @@ elif menu == "3. 모델 학습 & 평가":
 elif menu == "4. 실시간 시뮬레이터":
     st.title("🚨 실시간 이상 금융거래 탐지 시뮬레이터")
     st.markdown(
-        "거래 데이터를 직접 조절하여 입력하면, 학습된 분류 모델이 실시간으로 **정상 거래 여부와 사기 위험 확률(%)**을 진단합니다."
+        "거래 데이터를 직접 조절하거나 **[실제 사기 예시 자동 입력]** 버튼을 눌러 모델의 실시간 위험도 판별 결과를 확인하세요."
     )
 
-    feature_cols = ["Time", "V1", "V2", "V3", "V4", "V5", "Amount"]
+    feature_cols = ["Hour", "V1", "V2", "V3", "V4", "V5", "Amount"]
     X_all = df[feature_cols].copy()
     y_all = df["Class"]
 
     scaler = RobustScaler()
-    X_all[["Time", "Amount"]] = scaler.fit_transform(X_all[["Time", "Amount"]])
+    X_all[["Hour", "Amount"]] = scaler.fit_transform(X_all[["Hour", "Amount"]])
 
     sim_model_name = st.radio(
         "진단에 사용할 모델 선택",
@@ -410,75 +414,102 @@ elif menu == "4. 실시간 시뮬레이터":
 
     sim_model.fit(X_all, y_all)
 
+    # [수정 반영 ③] session_state 초기화 및 원클릭 예시 자동 채우기 기능
+    if "sim_hour" not in st.session_state:
+        st.session_state.sim_hour = int(df["Hour"].median())
+        st.session_state.sim_amount = 150.0
+        st.session_state.sim_v1 = float(df["V1"].median())
+        st.session_state.sim_v2 = float(df["V2"].median())
+        st.session_state.sim_v3 = float(df["V3"].median())
+        st.session_state.sim_v4 = float(df["V4"].median())
+        st.session_state.sim_v5 = float(df["V5"].median())
+
+    btn_col1, btn_col2 = st.columns([1, 1])
+    with btn_col1:
+        if (df["Class"] == 1).sum() > 0:
+            if st.button("🚨 실제 사기 거래 예시 값 자동 입력"):
+                fraud_sample = df[df["Class"] == 1].iloc[0]
+                st.session_state.sim_hour = int(fraud_sample["Hour"])
+                st.session_state.sim_amount = float(fraud_sample["Amount"])
+                st.session_state.sim_v1 = float(fraud_sample["V1"])
+                st.session_state.sim_v2 = float(fraud_sample["V2"])
+                st.session_state.sim_v3 = float(fraud_sample["V3"])
+                st.session_state.sim_v4 = float(fraud_sample["V4"])
+                st.session_state.sim_v5 = float(fraud_sample["V5"])
+                st.rerun()
+
+    with btn_col2:
+        if st.button("🔄 일반 정상 거래 기본값으로 초기화"):
+            normal_sample = df[df["Class"] == 0].iloc[0]
+            st.session_state.sim_hour = int(normal_sample["Hour"])
+            st.session_state.sim_amount = float(normal_sample["Amount"])
+            st.session_state.sim_v1 = float(normal_sample["V1"])
+            st.session_state.sim_v2 = float(normal_sample["V2"])
+            st.session_state.sim_v3 = float(normal_sample["V3"])
+            st.session_state.sim_v4 = float(normal_sample["V4"])
+            st.session_state.sim_v5 = float(normal_sample["V5"])
+            st.rerun()
+
     st.divider()
     st.subheader("1) 테스트할 결제 정보 입력")
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        in_time = st.slider(
-            "결제 경과 시간 (Time, 초)",
-            min_value=int(df["Time"].min()),
-            max_value=int(df["Time"].max()),
-            value=int(df["Time"].median()),
+        in_hour = st.slider(
+            "결제 시간대 (Hour, 0시~23시)",
+            min_value=0,
+            max_value=23,
+            key="sim_hour",
         )
         in_amount = st.number_input(
             "결제 금액 (Amount)",
             min_value=0.0,
             max_value=float(df["Amount"].max()),
-            value=150.0,
             step=10.0,
+            key="sim_amount",
         )
     with c2:
         in_v1 = st.slider(
             "특성 변수 V1",
             float(df["V1"].min()),
             float(df["V1"].max()),
-            float(df["V1"].median()),
+            key="sim_v1",
         )
         in_v2 = st.slider(
             "특성 변수 V2",
             float(df["V2"].min()),
             float(df["V2"].max()),
-            float(df["V2"].median()),
+            key="sim_v2",
         )
         in_v3 = st.slider(
             "특성 변수 V3",
             float(df["V3"].min()),
             float(df["V3"].max()),
-            float(df["V3"].median()),
+            key="sim_v3",
         )
     with c3:
         in_v4 = st.slider(
             "특성 변수 V4",
             float(df["V4"].min()),
             float(df["V4"].max()),
-            float(df["V4"].median()),
+            key="sim_v4",
         )
         in_v5 = st.slider(
             "특성 변수 V5",
             float(df["V5"].min()),
             float(df["V5"].max()),
-            float(df["V5"].median()),
+            key="sim_v5",
         )
-
-    if (df["Class"] == 1).sum() > 0:
-        if st.button("💡 데이터셋의 실제 사기 거래 예시 값 자동 채우기"):
-            fraud_sample = df[df["Class"] == 1].iloc[0]
-            st.info(
-                f"예시 사기 거래 기준값 → Time: {int(fraud_sample['Time'])}, Amount: {fraud_sample['Amount']:.2f}, "
-                f"V1: {fraud_sample['V1']:.2f}, V2: {fraud_sample['V2']:.2f}, V3: {fraud_sample['V3']:.2f}, "
-                f"V4: {fraud_sample['V4']:.2f}, V5: {fraud_sample['V5']:.2f} (위 슬라이더를 이 값 근처로 맞춰보세요!)"
-            )
 
     st.divider()
     if st.button("🔍 실시간 이상 거래 판별 실행", type="primary"):
         input_df = pd.DataFrame(
-            [[in_time, in_v1, in_v2, in_v3, in_v4, in_v5, in_amount]],
+            [[in_hour, in_v1, in_v2, in_v3, in_v4, in_v5, in_amount]],
             columns=feature_cols,
         )
 
-        input_df[["Time", "Amount"]] = scaler.transform(
-            input_df[["Time", "Amount"]]
+        input_df[["Hour", "Amount"]] = scaler.transform(
+            input_df[["Hour", "Amount"]]
         )
 
         pred_class = sim_model.predict(input_df)[0]
