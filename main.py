@@ -15,7 +15,6 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import RobustScaler
-from sklearn.tree import DecisionTreeClassifier, export_text
 import streamlit as st
 
 # ---------------------------------------------------------
@@ -29,7 +28,7 @@ st.set_page_config(
 
 
 def set_korean_font():
-    """운영체제(Windows, Mac, Linux/Streamlit Cloud)에 맞게 한글 폰트를 자동 설정"""
+    """운영체제(Windows, Mac, Linux/Streamlit Cloud)에 맞게 한글 폰트 자동 설정"""
     system_name = platform.system()
     if system_name == "Windows":
         plt.rc("font", family="Malgun Gothic")
@@ -51,79 +50,36 @@ set_korean_font()
 
 
 # ---------------------------------------------------------
-# 1. 데이터 로드 및 사이드바 파일 업로더
+# 1. GitHub 저장소의 CSV 데이터 직접 로드
 # ---------------------------------------------------------
 @st.cache_data
-def generate_fallback_data():
-    """CSV 미업로드 시 자동 작동하는 기본 FDS 데이터(1,000행)"""
-    np.random.seed(42)
-    n_normal = 950
-    n_fraud = 50
-
-    normal_df = pd.DataFrame({
-        "Time": np.random.randint(0, 172800, n_normal),
-        "V1": np.random.normal(0.2, 1.0, n_normal),
-        "V2": np.random.normal(-0.1, 1.0, n_normal),
-        "V3": np.random.normal(0.3, 1.0, n_normal),
-        "V4": np.random.normal(-0.2, 1.0, n_normal),
-        "V5": np.random.normal(0.1, 1.0, n_normal),
-        "Amount": np.round(np.random.exponential(60, n_normal), 2),
-        "Class": 0,
-    })
-
-    fraud_df = pd.DataFrame({
-        "Time": np.random.randint(0, 172800, n_fraud),
-        "V1": np.random.normal(-2.5, 1.5, n_fraud),
-        "V2": np.random.normal(2.2, 1.4, n_fraud),
-        "V3": np.random.normal(-3.1, 1.6, n_fraud),
-        "V4": np.random.normal(2.8, 1.3, n_fraud),
-        "V5": np.random.normal(-1.8, 1.5, n_fraud),
-        "Amount": np.round(np.random.exponential(220, n_fraud) + 50, 2),
-        "Class": 1,
-    })
-
-    df = pd.concat([normal_df, fraud_df], ignore_index=True)
-    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
-    return df
+def load_dataset():
+    file_path = "credit_card_fraud_synthetic.csv"
+    if not os.path.exists(file_path):
+        st.error(
+            f"❌ '{file_path}' 파일을 찾을 수 없습니다. GitHub 저장소 최상위 경로에 파일명이 정확히 일치하는지 확인해주세요."
+        )
+        st.stop()
+    data = pd.read_csv(file_path)
+    # Time(초 단위)을 24시간 기준 시간대(Hour) 파생 변수로 생성
+    data["Hour"] = (data["Time"] // 3600) % 24
+    return data
 
 
-st.sidebar.title("🛡️ FDS 보안 탐지 메뉴")
-
-st.sidebar.subheader("📂 데이터 파일 업로드")
-uploaded_file = st.sidebar.file_uploader(
-    "CSV 파일을 업로드하세요 (선택 사항)", type=["csv"]
-)
-
-if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
-    st.sidebar.success("✅ 업로드된 CSV 파일을 사용 중입니다!")
-elif os.path.exists("credit_card_fraud_synthetic.csv"):
-    df = pd.read_csv("credit_card_fraud_synthetic.csv")
-    st.sidebar.info("📁 저장소의 기본 CSV 파일을 로드했습니다.")
-else:
-    df = generate_fallback_data()
-    st.sidebar.warning("⚡ 내장된 샘플 데이터를 사용 중입니다.")
-
-required_cols = {"Time", "V1", "V2", "V3", "V4", "V5", "Amount", "Class"}
-if not required_cols.issubset(set(df.columns)):
-    st.error(
-        f"❌ 업로드한 CSV에 필수 컬럼({required_cols})이 모두 포함되어 있어야 합니다."
-    )
-    st.stop()
-
-# [수정 반영 ②] EDA 인사이트를 모델링과 연결하기 위해 Hour 파생 변수 생성
-df["Hour"] = (df["Time"] // 3600) % 24
+df = load_dataset()
 
 # ---------------------------------------------------------
 # 2. 사이드바 네비게이션 메뉴
 # ---------------------------------------------------------
-st.sidebar.divider()
+st.sidebar.title("🛡️ FDS 보안 탐지 메뉴")
+st.sidebar.success("📁 credit_card_fraud_synthetic.csv 연동 완료")
+
 menu = st.sidebar.radio(
     "페이지 이동",
     [
         "1. 프로젝트 개요",
         "2. EDA & 전처리",
-        "3. 모델 학습 & 평가",
+        "3. 로지스틱 회귀 학습 & 평가",
         "4. 실시간 시뮬레이터",
     ],
 )
@@ -142,23 +98,22 @@ st.sidebar.info(
 if menu == "1. 프로젝트 개요":
     st.title("🛡️ 신용카드 이상 금융거래(FDS) 탐지 웹앱")
     st.markdown(
-        "머신러닝 분류(Classification) 알고리즘을 활용하여 신용카드 결제 로그의 이상 패턴을 탐지하고 실시간 위험도를 진단합니다."
+        "**로지스틱 회귀(Logistic Regression)** 분류 모델을 활용하여 신용카드 결제 로그의 이상 패턴을 탐지하고 실시간 사기 위험 확률을 진단합니다."
     )
 
     st.divider()
     col1, col2 = st.columns([1.2, 1])
 
     with col1:
-        st.subheader("📌 연구 대질문 및 핵심 목표")
+        st.subheader("📌 연구 대질문 및 모델 선정 근거")
         st.info(
             "**대질문:** 신용카드 결제 거래의 시간대(`Hour`), 결제 금액(`Amount`), 거래 변동 특성($V_1 \\sim V_5$)을 분석하여 "
-            "극심한 클래스 불균형 속에서도 실제 사기(Fraud) 거래를 효과적으로 탐지할 수 있는가?"
+            "극심한 클래스 불균형 속에서도 실제 사기(Fraud) 거래를 효과적으로 분류할 수 있는가?"
         )
         st.markdown("""
-        **핵심 해결 과제 및 데이터 과학적 설계**
-        1. **데이터 누수(Data Leakage) 방지:** 훈련/테스트 데이터를 먼저 분할한 후 훈련 세트 기준으로만 스케일링을 학습시켜 공정한 성능 평가를 보장합니다.
-        2. **클래스 불균형 극복:** 전체 데이터 중 사기 거래 비율이 극히 낮은 환경에서 `class_weight='balanced'` 옵션으로 소수 클래스 탐지력을 강화합니다.
-        3. **보안 특화 평가지표 검증:** 단순 정확도(Accuracy)의 함정을 피하고, 실제 사기를 놓치지 않는 **재현율(Recall)**과 **혼동 행렬(Confusion Matrix)**을 중점 검증합니다.
+        **왜 선형회귀가 아닌 '로지스틱 회귀'를 선택했는가?**
+        * 입력 변수(`Amount`, `V1~V5` 등)는 연속형 숫자이지만, 예측해야 할 종속 변수(`Class`)는 **0(정상)과 1(사기)로 나뉘는 이진 범주형 데이터**입니다.
+        * 일반 선형회귀는 예측값이 0 미만이나 1 초과로 발산할 수 있는 반면, **로지스틱 회귀**는 시그모이드(Sigmoid) 함수를 통해 결과를 **0~100% 사이의 사기 발생 확률**로 변환해 주므로 보안 위험도 판별에 최적입니다.
         """)
 
     with col2:
@@ -174,9 +129,9 @@ if menu == "1. 프로젝트 개요":
             "구현 내용": [
                 "실생활 금융 보안(FDS) 사기 탐지 문제 해결",
                 "Train/Test 분할 후 RobustScaler 적용 & Hour 파생변수 반영",
-                "의사결정나무 & 로지스틱 회귀 (가중치 균형 적용)",
-                "정확도 외 재현율(Recall) 및 혼동 행렬 시각화",
-                "파일 업로더 및 원클릭 실시간 시뮬레이터 구현",
+                "로지스틱 회귀 (이진 확률 예측 및 class_weight='balanced' 적용)",
+                "단순 정확도 외 재현율(Recall) 및 혼동 행렬 시각화",
+                "데이터 탐색부터 실시간 탐지 시뮬레이터까지 통합 구현",
             ],
             "완료 여부": ["완료", "완료", "완료", "완료", "완료"],
         })
@@ -213,7 +168,7 @@ elif menu == "2. EDA & 전처리":
             delta_color="inverse",
         )
         st.warning(
-            "⚠️ **분석 인사이트:** 사기 거래 비율이 매우 낮기 때문에, 학습 시 소수 클래스(사기)에 높은 가중치를 부여하는 보정 기법이 필수적입니다."
+            "⚠️ **분석 인사이트:** 전체 1,000건 중 사기 거래가 18건(1.80%)으로 극심한 불균형을 보이므로, 학습 시 `class_weight='balanced'` 옵션으로 소수 클래스 가중치를 보정합니다."
         )
 
     with col2:
@@ -250,9 +205,6 @@ elif menu == "2. EDA & 전처리":
         ax2.set_xlabel("거래 분류")
         ax2.set_ylabel("결제 금액 (Amount)")
         st.pyplot(fig2)
-        st.caption(
-            "결제 금액의 극단적 이상치(Outlier) 영향을 줄이기 위해 훈련 데이터 기준으로 RobustScaler를 적용합니다."
-        )
 
     with col4:
         fig3, ax3 = plt.subplots(figsize=(6, 4))
@@ -269,47 +221,36 @@ elif menu == "2. EDA & 전처리":
         ax3.set_xlabel("결제 시간 (0시 ~ 23시)")
         ax3.set_ylabel("빈도수")
         st.pyplot(fig3)
-        st.caption(
-            "초 단위 Time을 24시간 주기(Hour) 파생 변수로 변환하여 모델 학습 독립 변수로 직접 활용합니다."
-        )
 
 # =========================================================
-# 페이지 3: 모델 학습 & 평가
+# 페이지 3: 로지스틱 회귀 학습 & 평가
 # =========================================================
-elif menu == "3. 모델 학습 & 평가":
-    st.title("⚙️ 분류 모델 학습 및 성능 검증")
+elif menu == "3. 로지스틱 회귀 학습 & 평가":
+    st.title("⚙️ 로지스틱 회귀 모델 학습 및 성능 검증")
     st.markdown(
-        "훈련 데이터와 테스트 데이터를 **층화 추출(Stratified Split)**로 먼저 분할한 뒤 스케일링을 적용해 데이터 누수를 방지합니다."
+        "훈련 데이터와 테스트 데이터를 **층화 추출(Stratified Split)**로 먼저 분할한 뒤 스케일링을 적용해 데이터 누수(Data Leakage)를 방지합니다."
     )
 
-    col_opt1, col_opt2, col_opt3 = st.columns(3)
+    col_opt1, col_opt2 = st.columns(2)
     with col_opt1:
-        model_type = st.selectbox(
-            "분류 알고리즘 선택",
-            [
-                "의사결정나무 (Decision Tree)",
-                "로지스틱 회귀 (Logistic Regression)",
-            ],
-        )
-    with col_opt2:
         test_size = st.slider(
             "테스트 데이터 비율 (Test Size)", 0.1, 0.4, 0.2, step=0.05
         )
-    with col_opt3:
-        max_depth = st.slider(
-            "의사결정나무 최대 깊이 (max_depth)",
-            2,
-            10,
-            4,
-            disabled=(model_type != "의사결정나무 (Decision Tree)"),
+    with col_opt2:
+        threshold = st.slider(
+            "사기 판별 확률 임계값 (Threshold)",
+            0.1,
+            0.9,
+            0.5,
+            step=0.05,
+            help="사기 확률이 이 기준값 이상이면 사기(1)로 분류합니다. 낮출수록 사기 탐지 재현율(Recall)이 높아집니다.",
         )
 
-    # [수정 반영 ②] EDA에서 도출한 Hour 파생 변수를 독립 변수에 포함
     feature_cols = ["Hour", "V1", "V2", "V3", "V4", "V5", "Amount"]
     X = df[feature_cols].copy()
     y = df["Class"]
 
-    # [수정 반영 ①] 데이터 누수(Data Leakage) 방지를 위해 분할(Split)을 스케일링보다 먼저 수행
+    # 데이터 누수 방지를 위해 분할(Split)을 먼저 수행 후 스케일링
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=test_size, random_state=42, stratify=y
     )
@@ -318,15 +259,11 @@ elif menu == "3. 모델 학습 & 평가":
     X_train[["Hour", "Amount"]] = scaler.fit_transform(X_train[["Hour", "Amount"]])
     X_test[["Hour", "Amount"]] = scaler.transform(X_test[["Hour", "Amount"]])
 
-    if model_type == "의사결정나무 (Decision Tree)":
-        model = DecisionTreeClassifier(
-            max_depth=max_depth, class_weight="balanced", random_state=42
-        )
-    else:
-        model = LogisticRegression(class_weight="balanced", random_state=42)
-
+    model = LogisticRegression(class_weight="balanced", random_state=42)
     model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+
+    y_prob = model.predict_proba(X_test)[:, 1]
+    y_pred = (y_prob >= threshold).astype(int)
 
     acc = accuracy_score(y_test, y_pred)
     rec = recall_score(y_test, y_pred, zero_division=0)
@@ -335,7 +272,7 @@ elif menu == "3. 모델 학습 & 평가":
 
     st.divider()
     st.subheader(
-        f"📈 테스트 데이터({len(X_test)}건) 검증 결과 — {model_type}"
+        f"📈 테스트 데이터({len(X_test)}건) 검증 결과 — 로지스틱 회귀 (임계값 {threshold:.2f})"
     )
 
     m1, m2, m3, m4 = st.columns(4)
@@ -368,20 +305,26 @@ elif menu == "3. 모델 학습 & 평가":
         st.pyplot(fig_cm)
 
     with col_res2:
-        st.subheader("🔍 평가지표 해석 및 모델 설명")
-        st.markdown(f"""
-        * **왜 재현율(Recall)이 가장 중요한가?**
-          불균형 데이터에서는 모든 거래를 '정상'으로 찍어도 정확도가 90% 이상 나옵니다. 금융 보안에서는 **실제 사기 거래({cm[1].sum()}건) 중 모델이 사기로 잡아낸 비율({cm[1][1]}건, {rec*100:.1f}%)**인 재현율이 핵심입니다.
-        * **오탐(False Positive):** 정상 거래를 사기로 오인해 차단한 건수 = **{cm[0][1]}건**
-        * **미탐(False Negative):** 실제 사기 거래를 놓치고 승인한 건수 = **{cm[1][0]}건**
-        """)
+        st.subheader("📊 변수별 회귀 계수(가중치) 영향력")
+        coef_df = pd.DataFrame({
+            "변수명": feature_cols,
+            "회귀 계수(Weight)": model.coef_[0],
+        }).sort_values(by="회귀 계수(Weight)", ascending=False)
 
-        if model_type == "의사결정나무 (Decision Tree)":
-            with st.expander(
-                "🌳 의사결정나무 분류 규칙(Decision Rules) 텍스트 보기"
-            ):
-                tree_rules = export_text(model, feature_names=feature_cols)
-                st.code(tree_rules, language="text")
+        fig_coef, ax_coef = plt.subplots(figsize=(5, 3))
+        sns.barplot(
+            data=coef_df,
+            x="회귀 계수(Weight)",
+            y="변수명",
+            palette="coolwarm",
+            ax=ax_coef,
+        )
+        ax_coef.axvline(0, color="black", linewidth=0.8)
+        ax_coef.set_title("로지스틱 회귀 독립 변수별 영향력")
+        st.pyplot(fig_coef)
+        st.caption(
+            f"실제 사기 {cm[1].sum()}건 중 {cm[1][1]}건 탐지 (미탐 {cm[1][0]}건, 정상 오탐 {cm[0][1]}건). 임계값 슬라이더를 조절해 트레이드오프를 확인할 수 있습니다."
+        )
 
 # =========================================================
 # 페이지 4: 실시간 시뮬레이터
@@ -389,7 +332,7 @@ elif menu == "3. 모델 학습 & 평가":
 elif menu == "4. 실시간 시뮬레이터":
     st.title("🚨 실시간 이상 금융거래 탐지 시뮬레이터")
     st.markdown(
-        "거래 데이터를 직접 조절하거나 **[실제 사기 예시 자동 입력]** 버튼을 눌러 모델의 실시간 위험도 판별 결과를 확인하세요."
+        "거래 데이터를 직접 조절하거나 **[실제 사기 예시 자동 입력]** 버튼을 눌러 로지스틱 회귀 모델의 사기 확률을 진단하세요."
     )
 
     feature_cols = ["Hour", "V1", "V2", "V3", "V4", "V5", "Amount"]
@@ -399,25 +342,12 @@ elif menu == "4. 실시간 시뮬레이터":
     scaler = RobustScaler()
     X_all[["Hour", "Amount"]] = scaler.fit_transform(X_all[["Hour", "Amount"]])
 
-    sim_model_name = st.radio(
-        "진단에 사용할 모델 선택",
-        ["의사결정나무 (Decision Tree)", "로지스틱 회귀 (Logistic Regression)"],
-        horizontal=True,
-    )
-
-    if sim_model_name == "의사결정나무 (Decision Tree)":
-        sim_model = DecisionTreeClassifier(
-            max_depth=4, class_weight="balanced", random_state=42
-        )
-    else:
-        sim_model = LogisticRegression(class_weight="balanced", random_state=42)
-
+    sim_model = LogisticRegression(class_weight="balanced", random_state=42)
     sim_model.fit(X_all, y_all)
 
-    # [수정 반영 ③] session_state 초기화 및 원클릭 예시 자동 채우기 기능
     if "sim_hour" not in st.session_state:
         st.session_state.sim_hour = int(df["Hour"].median())
-        st.session_state.sim_amount = 150.0
+        st.session_state.sim_amount = float(df["Amount"].median())
         st.session_state.sim_v1 = float(df["V1"].median())
         st.session_state.sim_v2 = float(df["V2"].median())
         st.session_state.sim_v3 = float(df["V3"].median())
@@ -428,7 +358,15 @@ elif menu == "4. 실시간 시뮬레이터":
     with btn_col1:
         if (df["Class"] == 1).sum() > 0:
             if st.button("🚨 실제 사기 거래 예시 값 자동 입력"):
-                fraud_sample = df[df["Class"] == 1].iloc[0]
+                # 모델이 사기로 가장 명확히 잡아내는 사기 샘플 자동 선택
+                fraud_df = df[df["Class"] == 1].copy()
+                fraud_scaled = fraud_df[feature_cols].copy()
+                fraud_scaled[["Hour", "Amount"]] = scaler.transform(
+                    fraud_scaled[["Hour", "Amount"]]
+                )
+                best_idx = np.argmax(sim_model.predict_proba(fraud_scaled)[:, 1])
+                fraud_sample = fraud_df.iloc[best_idx]
+
                 st.session_state.sim_hour = int(fraud_sample["Hour"])
                 st.session_state.sim_amount = float(fraud_sample["Amount"])
                 st.session_state.sim_v1 = float(fraud_sample["V1"])
@@ -512,11 +450,10 @@ elif menu == "4. 실시간 시뮬레이터":
             input_df[["Hour", "Amount"]]
         )
 
-        pred_class = sim_model.predict(input_df)[0]
         pred_proba = sim_model.predict_proba(input_df)[0][1] * 100
 
         st.subheader("2) AI 보안 시스템 진단 결과")
-        if pred_class == 1 or pred_proba >= 50.0:
+        if pred_proba >= 50.0:
             st.error(
                 f"🚨 **[경고] 사기 의심 거래로 탐지되었습니다! (사기 위험 확률: {pred_proba:.1f}%)**"
             )
