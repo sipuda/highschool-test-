@@ -36,7 +36,6 @@ def set_korean_font():
     elif system_name == "Darwin":
         plt.rc("font", family="AppleGothic")
     else:
-        # Streamlit Cloud (Linux) 환경용 NanumGothic 설정
         font_dirs = ["/usr/share/fonts/truetype/nanum"]
         font_files = fm.findSystemFonts(fontpaths=font_dirs)
         if font_files:
@@ -45,36 +44,81 @@ def set_korean_font():
             plt.rc("font", family=font_name)
         else:
             plt.rc("font", family="DejaVu Sans")
-    plt.rcParams["axes.unicode_minus"] = False  # 마이너스 기호 깨짐 방지
+    plt.rcParams["axes.unicode_minus"] = False
 
 
 set_korean_font()
 
 
 # ---------------------------------------------------------
-# 1. 데이터 로드 및 캐싱
+# 1. 데이터 로드 및 사이드바 파일 업로더
 # ---------------------------------------------------------
 @st.cache_data
-def load_data():
-    file_path = "credit_card_fraud_synthetic.csv"
-    if not os.path.exists(file_path):
-        st.error(
-            f"❌ '{file_path}' 파일을 찾을 수 없습니다. GitHub 저장소에 CSV 파일을 함께 업로드했는지 확인해주세요."
-        )
-        st.stop()
-    df = pd.read_csv(file_path)
-    # Time(초 단위)을 24시간 기준 시간대(Hour) 파생 변수로 추가
-    df["Hour"] = (df["Time"] // 3600) % 24
+def generate_fallback_data():
+    """파일 업로드 전이나 GitHub에 CSV가 없을 때 자동 작동하는 기본 FDS 데이터(1,000행)"""
+    np.random.seed(42)
+    n_normal = 950
+    n_fraud = 50
+
+    normal_df = pd.DataFrame({
+        "Time": np.random.randint(0, 172800, n_normal),
+        "V1": np.random.normal(0.2, 1.0, n_normal),
+        "V2": np.random.normal(-0.1, 1.0, n_normal),
+        "V3": np.random.normal(0.3, 1.0, n_normal),
+        "V4": np.random.normal(-0.2, 1.0, n_normal),
+        "V5": np.random.normal(0.1, 1.0, n_normal),
+        "Amount": np.round(np.random.exponential(60, n_normal), 2),
+        "Class": 0,
+    })
+
+    fraud_df = pd.DataFrame({
+        "Time": np.random.randint(0, 172800, n_fraud),
+        "V1": np.random.normal(-2.5, 1.5, n_fraud),
+        "V2": np.random.normal(2.2, 1.4, n_fraud),
+        "V3": np.random.normal(-3.1, 1.6, n_fraud),
+        "V4": np.random.normal(2.8, 1.3, n_fraud),
+        "V5": np.random.normal(-1.8, 1.5, n_fraud),
+        "Amount": np.round(np.random.exponential(220, n_fraud) + 50, 2),
+        "Class": 1,
+    })
+
+    df = pd.concat([normal_df, fraud_df], ignore_index=True)
+    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
     return df
 
 
-df = load_data()
+st.sidebar.title("🛡️ FDS 보안 탐지 메뉴")
+
+# ⭐ CSV 파일 직접 업로드 위젯 추가
+st.sidebar.subheader("📂 데이터 파일 업로드")
+uploaded_file = st.sidebar.file_uploader(
+    "CSV 파일을 업로드하세요 (선택 사항)", type=["csv"]
+)
+
+if uploaded_file is not None:
+    df = pd.read_csv(uploaded_file)
+    st.sidebar.success("✅ 업로드된 CSV 파일을 사용 중입니다!")
+elif os.path.exists("credit_card_fraud_synthetic.csv"):
+    df = pd.read_csv("credit_card_fraud_synthetic.csv")
+    st.sidebar.info("📁 저장소의 기본 CSV 파일을 로드했습니다.")
+else:
+    df = generate_fallback_data()
+    st.sidebar.warning("⚡ 내장된 샘플 데이터를 사용 중입니다. (CSV 업로드 가능)")
+
+# 필수 컬럼 검증 및 Hour 파생 변수 생성
+required_cols = {"Time", "V1", "V2", "V3", "V4", "V5", "Amount", "Class"}
+if not required_cols.issubset(set(df.columns)):
+    st.error(
+        f"❌ 업로드한 CSV에 필수 컬럼({required_cols})이 모두 포함되어 있어야 합니다."
+    )
+    st.stop()
+
+df["Hour"] = (df["Time"] // 3600) % 24
 
 # ---------------------------------------------------------
 # 2. 사이드바 네비게이션 메뉴
 # ---------------------------------------------------------
-st.sidebar.title("🛡️ FDS 보안 탐지 메뉴")
-st.sidebar.markdown("원하는 분석 단계를 선택하세요.")
+st.sidebar.divider()
 menu = st.sidebar.radio(
     "페이지 이동",
     [
@@ -133,7 +177,7 @@ if menu == "1. 프로젝트 개요":
                 "RobustScaler 스케일링 및 층화 추출(Stratify)",
                 "의사결정나무 & 로지스틱 회귀 (가중치 균형 적용)",
                 "정확도 외 재현율(Recall) 및 혼동 행렬 시각화",
-                "EDA부터 실시간 탐지 시뮬레이터까지 통합 구현",
+                "파일 업로더 및 실시간 탐지 시뮬레이터 통합 구현",
             ],
             "완료 여부": ["완료", "완료", "완료", "완료", "완료"],
         })
@@ -158,11 +202,14 @@ elif menu == "2. EDA & 전처리":
 
     with col1:
         class_counts = df["Class"].value_counts()
-        fraud_ratio = (class_counts[1] / len(df)) * 100
-        st.metric("정상 거래 (Class = 0)", f"{class_counts[0]:,}건")
+        fraud_count = class_counts.get(1, 0)
+        normal_count = class_counts.get(0, 0)
+        fraud_ratio = (fraud_count / len(df)) * 100
+
+        st.metric("정상 거래 (Class = 0)", f"{normal_count:,}건")
         st.metric(
             "사기 거래 (Class = 1)",
-            f"{class_counts[1]:,}건",
+            f"{fraud_count:,}건",
             f"전체의 {fraud_ratio:.2f}%",
             delta_color="inverse",
         )
@@ -174,14 +221,14 @@ elif menu == "2. EDA & 전처리":
         fig1, ax1 = plt.subplots(figsize=(6, 4))
         sns.barplot(
             x=["정상 거래 (0)", "사기 거래 (1)"],
-            y=class_counts.values,
+            y=[normal_count, fraud_count],
             palette=["#4A90E2", "#E74C3C"],
             ax=ax1,
         )
         ax1.set_title("정상 vs 사기 거래 건수 비교 (클래스 불균형)")
         ax1.set_ylabel("거래 건수 (건)")
-        for i, v in enumerate(class_counts.values):
-            ax1.text(i, v + 15, f"{v}건", ha="center", fontweight="bold")
+        for i, v in enumerate([normal_count, fraud_count]):
+            ax1.text(i, v + (len(df) * 0.015), f"{v}건", ha="center", fontweight="bold")
         st.pyplot(fig1)
 
     st.divider()
@@ -234,7 +281,6 @@ elif menu == "3. 모델 학습 & 평가":
         "훈련 데이터와 테스트 데이터를 **층화 추출(Stratified Split)**로 분할하고, 클래스 불균형 보정(`class_weight='balanced'`)을 적용해 성능을 평가합니다."
     )
 
-    # 모델 설정 컨트롤 패널
     col_opt1, col_opt2, col_opt3 = st.columns(3)
     with col_opt1:
         model_type = st.selectbox(
@@ -257,7 +303,6 @@ elif menu == "3. 모델 학습 & 평가":
             disabled=(model_type != "의사결정나무 (Decision Tree)"),
         )
 
-    # 데이터 전처리 및 분할
     feature_cols = ["Time", "V1", "V2", "V3", "V4", "V5", "Amount"]
     X = df[feature_cols].copy()
     y = df["Class"]
@@ -269,7 +314,6 @@ elif menu == "3. 모델 학습 & 평가":
         X, y, test_size=test_size, random_state=42, stratify=y
     )
 
-    # 모델 생성 및 학습 (class_weight='balanced' 필수 적용)
     if model_type == "의사결정나무 (Decision Tree)":
         model = DecisionTreeClassifier(
             max_depth=max_depth, class_weight="balanced", random_state=42
@@ -280,7 +324,6 @@ elif menu == "3. 모델 학습 & 평가":
     model.fit(X_train, y_train)
     y_pred = model.predict(X_test)
 
-    # 평가지표 계산
     acc = accuracy_score(y_test, y_pred)
     rec = recall_score(y_test, y_pred, zero_division=0)
     prec = precision_score(y_test, y_pred, zero_division=0)
@@ -345,7 +388,6 @@ elif menu == "4. 실시간 시뮬레이터":
         "거래 데이터를 직접 조절하여 입력하면, 학습된 분류 모델이 실시간으로 **정상 거래 여부와 사기 위험 확률(%)**을 진단합니다."
     )
 
-    # 전체 데이터 기반 모델 학습 (실시간 추론용)
     feature_cols = ["Time", "V1", "V2", "V3", "V4", "V5", "Amount"]
     X_all = df[feature_cols].copy()
     y_all = df["Class"]
@@ -419,14 +461,14 @@ elif menu == "4. 실시간 시뮬레이터":
             float(df["V5"].median()),
         )
 
-    # 사기 거래 실제 샘플 불러오기 편의 버튼
-    if st.button("💡 데이터셋의 실제 사기 거래 예시 값 자동 채우기"):
-        fraud_sample = df[df["Class"] == 1].iloc[0]
-        st.info(
-            f"예시 사기 거래 기준값 → Time: {int(fraud_sample['Time'])}, Amount: {fraud_sample['Amount']:.2f}, "
-            f"V1: {fraud_sample['V1']:.2f}, V2: {fraud_sample['V2']:.2f}, V3: {fraud_sample['V3']:.2f}, "
-            f"V4: {fraud_sample['V4']:.2f}, V5: {fraud_sample['V5']:.2f} (위 슬라이더를 이 값 근처로 맞춰보세요!)"
-        )
+    if (df["Class"] == 1).sum() > 0:
+        if st.button("💡 데이터셋의 실제 사기 거래 예시 값 자동 채우기"):
+            fraud_sample = df[df["Class"] == 1].iloc[0]
+            st.info(
+                f"예시 사기 거래 기준값 → Time: {int(fraud_sample['Time'])}, Amount: {fraud_sample['Amount']:.2f}, "
+                f"V1: {fraud_sample['V1']:.2f}, V2: {fraud_sample['V2']:.2f}, V3: {fraud_sample['V3']:.2f}, "
+                f"V4: {fraud_sample['V4']:.2f}, V5: {fraud_sample['V5']:.2f} (위 슬라이더를 이 값 근처로 맞춰보세요!)"
+            )
 
     st.divider()
     if st.button("🔍 실시간 이상 거래 판별 실행", type="primary"):
@@ -435,7 +477,6 @@ elif menu == "4. 실시간 시뮬레이터":
             columns=feature_cols,
         )
 
-        # 학습 때와 동일한 스케일러 적용
         input_df[["Time", "Amount"]] = scaler.transform(
             input_df[["Time", "Amount"]]
         )
