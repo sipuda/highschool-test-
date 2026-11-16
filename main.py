@@ -1,10 +1,8 @@
 import os
-import platform
-import matplotlib.font_manager as fm
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
+import plotly.express as px
+import plotly.graph_objects as go
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
@@ -15,10 +13,11 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import RobustScaler
+from sklearn.tree import DecisionTreeClassifier
 import streamlit as st
 
 # ---------------------------------------------------------
-# 0. 페이지 기본 설정 및 한글 폰트 깨짐 방지 설정
+# 0. 페이지 기본 설정
 # ---------------------------------------------------------
 st.set_page_config(
     page_title="신용카드 이상 금융거래(FDS) 탐지 시스템",
@@ -26,42 +25,31 @@ st.set_page_config(
     layout="wide",
 )
 
-
-def set_korean_font():
-    """운영체제(Windows, Mac, Linux/Streamlit Cloud)에 맞게 한글 폰트 자동 설정"""
-    system_name = platform.system()
-    if system_name == "Windows":
-        plt.rc("font", family="Malgun Gothic")
-    elif system_name == "Darwin":
-        plt.rc("font", family="AppleGothic")
-    else:
-        font_dirs = ["/usr/share/fonts/truetype/nanum"]
-        font_files = fm.findSystemFonts(fontpaths=font_dirs)
-        if font_files:
-            fm.fontManager.addfont(font_files[0])
-            font_name = fm.FontProperties(fname=font_files[0]).get_name()
-            plt.rc("font", family=font_name)
-        else:
-            plt.rc("font", family="DejaVu Sans")
-    plt.rcParams["axes.unicode_minus"] = False
-
-
-set_korean_font()
+# 변수 영문-우리말 매핑 딕셔너리
+FEATURE_KOR_MAP = {
+    "Hour": "결제 시간대(0~23시)",
+    "Amount": "결제 금액(Amount)",
+    "V1": "거래 변동 패턴 V1",
+    "V2": "거래 변동 패턴 V2",
+    "V3": "거래 변동 패턴 V3",
+    "V4": "거래 변동 패턴 V4",
+    "V5": "거래 변동 패턴 V5",
+}
+KOR_TO_ENG = {v: k for k, v in FEATURE_KOR_MAP.items()}
 
 
 # ---------------------------------------------------------
-# 1. GitHub 저장소의 CSV 데이터 직접 로드
+# 1. 데이터 로드
 # ---------------------------------------------------------
 @st.cache_data
 def load_dataset():
     file_path = "credit_card_fraud_synthetic.csv"
     if not os.path.exists(file_path):
         st.error(
-            f"❌ '{file_path}' 파일을 찾을 수 없습니다. GitHub 저장소 최상위 경로에 파일명이 정확히 일치하는지 확인해주세요."
+            f"❌ '{file_path}' 파일을 찾을 수 없습니다. GitHub 저장소 최상위 경로에 파일이 있는지 확인해주세요."
         )
         st.stop()
     data = pd.read_csv(file_path)
-    # Time(초 단위)을 24시간 기준 시간대(Hour) 파생 변수로 생성
     data["Hour"] = (data["Time"] // 3600) % 24
     return data
 
@@ -72,14 +60,14 @@ df = load_dataset()
 # 2. 사이드바 네비게이션 메뉴
 # ---------------------------------------------------------
 st.sidebar.title("🛡️ FDS 보안 탐지 메뉴")
-st.sidebar.success("📁 credit_card_fraud_synthetic.csv 연동 완료")
+st.sidebar.success("📁 credit_card_fraud_synthetic.csv 연동됨")
 
 menu = st.sidebar.radio(
     "페이지 이동",
     [
         "1. 프로젝트 개요",
         "2. EDA & 전처리",
-        "3. 로지스틱 회귀 학습 & 평가",
+        "3. 성능 높이기 (가중치 전·후 비교)",
         "4. 실시간 시뮬레이터",
     ],
 )
@@ -98,7 +86,7 @@ st.sidebar.info(
 if menu == "1. 프로젝트 개요":
     st.title("🛡️ 신용카드 이상 금융거래(FDS) 탐지 웹앱")
     st.markdown(
-        "**로지스틱 회귀(Logistic Regression)** 분류 모델을 활용하여 신용카드 결제 로그의 이상 패턴을 탐지하고 실시간 사기 위험 확률을 진단합니다."
+        "극심한 클래스 불균형(정상 98.2% vs 사기 1.8%) 환경에서 **가중치 보정(`class_weight='balanced'`)**과 **입력 속성 조합**을 통해 사기 탐지 성능을 높이는 과정을 탐구합니다."
     )
 
     st.divider()
@@ -107,13 +95,15 @@ if menu == "1. 프로젝트 개요":
     with col1:
         st.subheader("📌 연구 대질문 및 모델 선정 근거")
         st.info(
-            "**대질문:** 신용카드 결제 거래의 시간대(`Hour`), 결제 금액(`Amount`), 거래 변동 특성($V_1 \\sim V_5$)을 분석하여 "
-            "극심한 클래스 불균형 속에서도 실제 사기(Fraud) 거래를 효과적으로 분류할 수 있는가?"
+            "**대질문:** 신용카드 결제 거래의 시간대, 결제 금액, 거래 변동 특성을 분석하여 "
+            "극심한 불균형 데이터 속에서도 실제 사기(Fraud) 거래를 효과적으로 탐지할 수 있는가?"
         )
         st.markdown("""
-        **왜 선형회귀가 아닌 '로지스틱 회귀'를 선택했는가?**
-        * 입력 변수(`Amount`, `V1~V5` 등)는 연속형 숫자이지만, 예측해야 할 종속 변수(`Class`)는 **0(정상)과 1(사기)로 나뉘는 이진 범주형 데이터**입니다.
-        * 일반 선형회귀는 예측값이 0 미만이나 1 초과로 발산할 수 있는 반면, **로지스틱 회귀**는 시그모이드(Sigmoid) 함수를 통해 결과를 **0~100% 사이의 사기 발생 확률**로 변환해 주므로 보안 위험도 판별에 최적입니다.
+        **핵심 탐구 전략**
+        1. **가중치 보정 전·후 비교:** 사기 거래가 매우 드문 데이터에서는 모델이 모든 거래를 '정상'으로 예측하는 편향이 발생합니다. 가중치를 맞추기 전과 맞춘 뒤의 **재현율(Recall)과 혼동 행렬 변화**를 나란히 비교합니다.
+        2. **두 가지 분류 모델 대조:**
+           * **로지스틱 회귀(확률로 답하는 모델):** 연속형 거래 데이터를 바탕으로 0~100% 사이의 사기 확률과 직선(평면) 결정 경계를 도출합니다.
+           * **의사결정나무(질문으로 답하는 모델):** 스무고개 방식의 조건 분기를 통해 비선형 이상 거래 패턴을 포착합니다.
         """)
 
     with col2:
@@ -123,15 +113,15 @@ if menu == "1. 프로젝트 개요":
                 "1. 문제 정의의 참신성",
                 "2. 전처리 및 누수 방지",
                 "3. 적절한 분류 모델 선정",
-                "4. 논리적 평가 지표 활용",
+                "4. 논리적 평가 지표 및 개선",
                 "5. Streamlit 웹앱 완성도",
             ],
             "구현 내용": [
                 "실생활 금융 보안(FDS) 사기 탐지 문제 해결",
-                "Train/Test 분할 후 RobustScaler 적용 & Hour 파생변수 반영",
-                "로지스틱 회귀 (이진 확률 예측 및 class_weight='balanced' 적용)",
-                "단순 정확도 외 재현율(Recall) 및 혼동 행렬 시각화",
-                "데이터 탐색부터 실시간 탐지 시뮬레이터까지 통합 구현",
+                "Train/Test 분할 후 RobustScaler 적용 & 결측치 확인",
+                "로지스틱 회귀 & 의사결정나무 모델 동시 비교",
+                "가중치 보정 전·후 혼동 행렬 비교 및 2D/3D 결정 경계 시각화",
+                "Plotly 인터랙티브 시각화 및 실시간 시뮬레이터 구현",
             ],
             "완료 여부": ["완료", "완료", "완료", "완료", "완료"],
         })
@@ -143,188 +133,321 @@ if menu == "1. 프로젝트 개요":
 elif menu == "2. EDA & 전처리":
     st.title("📊 탐색적 데이터 분석(EDA) 및 전처리")
 
-    st.subheader("1) 원본 데이터 및 파생 변수(`Hour`) 미리보기")
+    st.subheader("1) 원본 데이터 미리보기")
     st.dataframe(df.head(10), use_container_width=True)
-
     st.markdown(
-        f"**결측치 확인:** 전체 컬럼 결측치 합계 = **{df.isnull().sum().sum()}건** (결측치 없음 확인)"
+        f"**결측치 점검:** 전체 컬럼 결측치 합계 = **{df.isnull().sum().sum()}건** (결측치 없음 확인)"
     )
 
     st.divider()
-    st.subheader("2) 클래스 불균형(Class Imbalance) 분포 확인")
-    col1, col2 = st.columns([1, 1.2])
+    col1, col2 = st.columns(2)
 
     with col1:
-        class_counts = df["Class"].value_counts()
-        fraud_count = class_counts.get(1, 0)
-        normal_count = class_counts.get(0, 0)
-        fraud_ratio = (fraud_count / len(df)) * 100
-
-        st.metric("정상 거래 (Class = 0)", f"{normal_count:,}건")
-        st.metric(
-            "사기 거래 (Class = 1)",
-            f"{fraud_count:,}건",
-            f"전체의 {fraud_ratio:.2f}%",
-            delta_color="inverse",
+        st.subheader("2) 정상 vs 사기 거래 불균형 분포")
+        counts_df = df["Class"].value_counts().reset_index()
+        counts_df.columns = ["거래 유형", "건수"]
+        counts_df["거래 유형"] = counts_df["거래 유형"].map(
+            {0: "정상 거래 (0)", 1: "사기 거래 (1)"}
         )
-        st.warning(
-            "⚠️ **분석 인사이트:** 전체 1,000건 중 사기 거래가 18건(1.80%)으로 극심한 불균형을 보이므로, 학습 시 `class_weight='balanced'` 옵션으로 소수 클래스 가중치를 보정합니다."
+        fig_bar = px.bar(
+            counts_df,
+            x="거래 유형",
+            y="건수",
+            color="거래 유형",
+            text="건수",
+            color_discrete_map={
+                "정상 거래 (0)": "#4A90E2",
+                "사기 거래 (1)": "#E74C3C",
+            },
+            title="클래스 불균형 현황 (정상 982건 vs 사기 18건)",
         )
+        fig_bar.update_traces(textposition="outside")
+        st.plotly_chart(fig_bar, use_container_width=True)
 
     with col2:
-        fig1, ax1 = plt.subplots(figsize=(6, 4))
-        sns.barplot(
-            x=["정상 거래 (0)", "사기 거래 (1)"],
-            y=[normal_count, fraud_count],
-            palette=["#4A90E2", "#E74C3C"],
-            ax=ax1,
+        st.subheader("3) 거래 유형별 결제 금액 분포")
+        plot_df = df.copy()
+        plot_df["거래 구분"] = plot_df["Class"].map(
+            {0: "정상 거래 (0)", 1: "사기 거래 (1)"}
         )
-        ax1.set_title("정상 vs 사기 거래 건수 비교 (클래스 불균형)")
-        ax1.set_ylabel("거래 건수 (건)")
-        for i, v in enumerate([normal_count, fraud_count]):
-            ax1.text(
-                i, v + (len(df) * 0.015), f"{v}건", ha="center", fontweight="bold"
-            )
-        st.pyplot(fig1)
-
-    st.divider()
-    st.subheader("3) 거래 금액(Amount) 및 시간대(Hour) 패턴 시각화")
-    col3, col4 = st.columns(2)
-
-    with col3:
-        fig2, ax2 = plt.subplots(figsize=(6, 4))
-        sns.boxplot(
-            data=df,
-            x="Class",
+        fig_box = px.box(
+            plot_df,
+            x="거래 구분",
             y="Amount",
-            palette=["#4A90E2", "#E74C3C"],
-            ax=ax2,
+            color="거래 구분",
+            color_discrete_map={
+                "정상 거래 (0)": "#4A90E2",
+                "사기 거래 (1)": "#E74C3C",
+            },
+            labels={"Amount": "결제 금액(Amount)"},
+            title="정상 vs 사기 거래 결제 금액 비교",
         )
-        ax2.set_xticklabels(["정상 거래 (0)", "사기 거래 (1)"])
-        ax2.set_title("거래 유형별 결제 금액(Amount) 분포 비교")
-        ax2.set_xlabel("거래 분류")
-        ax2.set_ylabel("결제 금액 (Amount)")
-        st.pyplot(fig2)
-
-    with col4:
-        fig3, ax3 = plt.subplots(figsize=(6, 4))
-        sns.histplot(
-            data=df,
-            x="Hour",
-            hue="Class",
-            bins=24,
-            multiple="dodge",
-            palette=["#4A90E2", "#E74C3C"],
-            ax=ax3,
-        )
-        ax3.set_title("결제 시간대(Hour)별 정상 vs 사기 거래 분포")
-        ax3.set_xlabel("결제 시간 (0시 ~ 23시)")
-        ax3.set_ylabel("빈도수")
-        st.pyplot(fig3)
+        st.plotly_chart(fig_box, use_container_width=True)
 
 # =========================================================
-# 페이지 3: 로지스틱 회귀 학습 & 평가
+# 페이지 3: 성능 높이기 (가중치 전·후 비교 및 2D/3D 결정 경계)
 # =========================================================
-elif menu == "3. 로지스틱 회귀 학습 & 평가":
-    st.title("⚙️ 로지스틱 회귀 모델 학습 및 성능 검증")
+elif menu == "3. 성능 높이기 (가중치 전·후 비교)":
+    st.title("🚀 성능 높이기: 가중치 보정 전·후 비교 및 결정 경계 시각화")
     st.markdown(
-        "훈련 데이터와 테스트 데이터를 **층화 추출(Stratified Split)**로 먼저 분할한 뒤 스케일링을 적용해 데이터 누수(Data Leakage)를 방지합니다."
+        "사기 거래가 아주 드문 불균형 데이터에서 **양쪽 클래스의 가중치를 맞추기 전(`None`)과 맞춘 뒤(`balanced`)**의 탐지 성능 변화를 비교합니다."
     )
 
-    col_opt1, col_opt2 = st.columns(2)
-    with col_opt1:
-        test_size = st.slider(
-            "테스트 데이터 비율 (Test Size)", 0.1, 0.4, 0.2, step=0.05
-        )
-    with col_opt2:
-        threshold = st.slider(
-            "사기 판별 확률 임계값 (Threshold)",
-            0.1,
-            0.9,
-            0.5,
-            step=0.05,
-            help="사기 확률이 이 기준값 이상이면 사기(1)로 분류합니다. 낮출수록 사기 탐지 재현율(Recall)이 높아집니다.",
-        )
+    # 화면 맨 위 입력 속성 선택
+    all_kor_features = list(FEATURE_KOR_MAP.values())
+    default_kor_features = [
+        FEATURE_KOR_MAP["Hour"],
+        FEATURE_KOR_MAP["Amount"],
+        FEATURE_KOR_MAP["V1"],
+        FEATURE_KOR_MAP["V4"],
+    ]
 
-    feature_cols = ["Hour", "V1", "V2", "V3", "V4", "V5", "Amount"]
-    X = df[feature_cols].copy()
+    selected_kor = st.multiselect(
+        "📌 모델 학습 및 시각화에 사용할 입력 속성을 고르세요 (최소 2개 이상 선택)",
+        options=all_kor_features,
+        default=default_kor_features,
+    )
+
+    if len(selected_kor) < 2:
+        st.warning("⚠️ 결정 경계 시각화와 모델 비교를 위해 속성을 최소 2개 이상 선택해 주세요.")
+        st.stop()
+
+    selected_eng = [KOR_TO_ENG[k] for k in selected_kor]
+
+    # 데이터 분할 (8:2 층화 추출) 및 누수 방지 전처리
+    X = df[selected_eng].copy()
     y = df["Class"]
 
-    # 데이터 누수 방지를 위해 분할(Split)을 먼저 수행 후 스케일링
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=42, stratify=y
+        X, y, test_size=0.2, random_state=42, stratify=y
     )
 
     scaler = RobustScaler()
-    X_train[["Hour", "Amount"]] = scaler.fit_transform(X_train[["Hour", "Amount"]])
-    X_test[["Hour", "Amount"]] = scaler.transform(X_test[["Hour", "Amount"]])
-
-    model = LogisticRegression(class_weight="balanced", random_state=42)
-    model.fit(X_train, y_train)
-
-    y_prob = model.predict_proba(X_test)[:, 1]
-    y_pred = (y_prob >= threshold).astype(int)
-
-    acc = accuracy_score(y_test, y_pred)
-    rec = recall_score(y_test, y_pred, zero_division=0)
-    prec = precision_score(y_test, y_pred, zero_division=0)
-    f1 = f1_score(y_test, y_pred, zero_division=0)
-
-    st.divider()
-    st.subheader(
-        f"📈 테스트 데이터({len(X_test)}건) 검증 결과 — 로지스틱 회귀 (임계값 {threshold:.2f})"
+    X_train_scaled = pd.DataFrame(
+        scaler.fit_transform(X_train), columns=selected_eng, index=X_train.index
+    )
+    X_test_scaled = pd.DataFrame(
+        scaler.transform(X_test), columns=selected_eng, index=X_test.index
     )
 
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("전체 정확도 (Accuracy)", f"{acc * 100:.1f}%")
-    m2.metric(
-        "⭐ 사기 탐지 재현율 (Recall)", f"{rec * 100:.1f}%", "보안 핵심 지표"
-    )
-    m3.metric("정밀도 (Precision)", f"{prec * 100:.1f}%")
-    m4.metric("F1-Score", f"{f1:.3f}")
+    # 모델 학습 함수 (가중치 전 vs 후)
+    def evaluate_before_after(model_cls, **kwargs):
+        m_before = model_cls(class_weight=None, random_state=42, **kwargs)
+        m_after = model_cls(class_weight="balanced", random_state=42, **kwargs)
+
+        m_before.fit(X_train_scaled, y_train)
+        m_after.fit(X_train_scaled, y_train)
+
+        pred_b = m_before.predict(X_test_scaled)
+        pred_a = m_after.predict(X_test_scaled)
+
+        cm_b = confusion_matrix(y_test, pred_b)
+        cm_a = confusion_matrix(y_test, pred_a)
+
+        metrics_df = pd.DataFrame({
+            "구분 항목": [
+                "정확도 (Accuracy)",
+                "⭐ 재현율 (Recall - 사기 탐지율)",
+                "정밀도 (Precision)",
+                "F1-Score",
+                "칸1: 정상 → 정상 예측 (TN)",
+                "칸2: 정상 → 사기 헛짚음 (FP)",
+                "칸3: 사기 → 정상 놓침 (FN)",
+                "칸4: 사기 → 사기 찾아냄 (TP)",
+            ],
+            "가중치 맞추기 전": [
+                f"{accuracy_score(y_test, pred_b)*100:.1f}%",
+                f"{recall_score(y_test, pred_b, zero_division=0)*100:.1f}%",
+                f"{precision_score(y_test, pred_b, zero_division=0)*100:.1f}%",
+                f"{f1_score(y_test, pred_b, zero_division=0):.3f}",
+                f"{cm_b[0][0]}건",
+                f"{cm_b[0][1]}건",
+                f"{cm_b[1][0]}건",
+                f"{cm_b[1][1]}건",
+            ],
+            "가중치 맞춘 뒤 (balanced)": [
+                f"{accuracy_score(y_test, pred_a)*100:.1f}%",
+                f"{recall_score(y_test, pred_a, zero_division=0)*100:.1f}%",
+                f"{precision_score(y_test, pred_a, zero_division=0)*100:.1f}%",
+                f"{f1_score(y_test, pred_a, zero_division=0):.3f}",
+                f"{cm_a[0][0]}건",
+                f"{cm_a[0][1]}건",
+                f"{cm_a[1][0]}건",
+                f"{cm_a[1][1]}건",
+            ],
+        })
+
+        summary_text = (
+            f"📌 **변화 요약:** 찾아낸 사기 건수는 **{cm_b[1][1]}건 → {cm_a[1][1]}건**, "
+            f"놓친 사기 건수는 **{cm_b[1][0]}건 → {cm_a[1][0]}건**, "
+            f"헛짚은 정상 거래 수는 **{cm_b[0][1]}건 → {cm_a[0][1]}건**으로 바뀌었습니다."
+        )
+        return m_before, m_after, metrics_df, summary_text
 
     st.divider()
-    col_res1, col_res2 = st.columns([1, 1.2])
+    col_m1, col_m2 = st.columns(2)
 
-    with col_res1:
-        st.subheader("🧩 혼동 행렬 (Confusion Matrix)")
-        cm = confusion_matrix(y_test, y_pred)
-        fig_cm, ax_cm = plt.subplots(figsize=(5, 4))
-        sns.heatmap(
-            cm,
-            annot=True,
-            fmt="d",
-            cmap="Blues",
-            cbar=False,
-            ax=ax_cm,
-            xticklabels=["정상 예측 (0)", "사기 예측 (1)"],
-            yticklabels=["실제 정상 (0)", "실제 사기 (1)"],
+    with col_m1:
+        st.subheader("1) 로지스틱 회귀 (확률로 답하는 모델)")
+        lr_before, lr_after, lr_table, lr_summary = evaluate_before_after(
+            LogisticRegression
         )
-        ax_cm.set_xlabel("모델 예측값")
-        ax_cm.set_ylabel("실제 정답")
-        st.pyplot(fig_cm)
+        st.dataframe(lr_table, use_container_width=True, hide_index=True)
+        st.info(lr_summary)
 
-    with col_res2:
-        st.subheader("📊 변수별 회귀 계수(가중치) 영향력")
-        coef_df = pd.DataFrame({
-            "변수명": feature_cols,
-            "회귀 계수(Weight)": model.coef_[0],
-        }).sort_values(by="회귀 계수(Weight)", ascending=False)
-
-        fig_coef, ax_coef = plt.subplots(figsize=(5, 3))
-        sns.barplot(
-            data=coef_df,
-            x="회귀 계수(Weight)",
-            y="변수명",
-            palette="coolwarm",
-            ax=ax_coef,
+    with col_m2:
+        st.subheader("2) 의사결정나무 (질문으로 답하는 모델)")
+        dt_before, dt_after, dt_table, dt_summary = evaluate_before_after(
+            DecisionTreeClassifier, max_depth=4
         )
-        ax_coef.axvline(0, color="black", linewidth=0.8)
-        ax_coef.set_title("로지스틱 회귀 독립 변수별 영향력")
-        st.pyplot(fig_coef)
+        st.dataframe(dt_table, use_container_width=True, hide_index=True)
+        st.info(dt_summary)
+
+    # ---------------------------------------------------------
+    # Plotly 2D / 3D 산점도 및 0.5 결정 경계선(평면) 시각화
+    # ---------------------------------------------------------
+    st.divider()
+    st.subheader("📈 로지스틱 회귀(확률로 답하는 모델) 0.5 결정 경계 시각화")
+
+    if len(selected_kor) == 2:
+        # 2개 속성 선택 시: 2D 산점도 + 전·후 0.5 경계선
+        f1_kor, f2_kor = selected_kor[0], selected_kor[1]
+        f1_eng, f2_eng = selected_eng[0], selected_eng[1]
+
+        plot_2d = X_test_scaled.copy()
+        plot_2d["실제 사기 여부"] = y_test.map(
+            {0: "정상 거래 (0)", 1: "사기 거래 (1)"}
+        )
+
+        fig2d = px.scatter(
+            plot_2d,
+            x=f1_eng,
+            y=f2_eng,
+            color="실제 사기 여부",
+            color_discrete_map={
+                "정상 거래 (0)": "#4A90E2",
+                "사기 거래 (1)": "#E74C3C",
+            },
+            labels={f1_eng: f"{f1_kor} (표준화)", f2_eng: f"{f2_kor} (표준화)"},
+            title=f"2차원 산점도 및 가중치 보정 전·후 0.5 결정 경계선 ({f1_kor} vs {f2_kor})",
+        )
+
+        x_min, x_max = plot_2d[f1_eng].min() - 0.5, plot_2d[f1_eng].max() + 0.5
+        y_min, y_max = plot_2d[f2_eng].min() - 0.5, plot_2d[f2_eng].max() + 0.5
+        x_vals = np.linspace(x_min, x_max, 200)
+
+        out_of_bounds_msgs = []
+
+        for model_obj, label_name, line_color, dash_style in [
+            (lr_before, "가중치 맞추기 전 0.5 경계선", "#2ECC71", "dash"),
+            (lr_after, "가중치 맞춘 뒤 0.5 경계선", "#F39C12", "solid"),
+        ]:
+            w1, w2 = model_obj.coef_[0][0], model_obj.coef_[0][1]
+            b = model_obj.intercept_[0]
+            if abs(w2) > 1e-6:
+                y_vals = -(w1 * x_vals + b) / w2
+                # 그림 영역 안에 경계선이 들어오는지 확인
+                in_view = (y_vals >= y_min) & (y_vals <= y_max)
+                if np.any(in_view):
+                    fig2d.add_trace(
+                        go.Scatter(
+                            x=x_vals[in_view],
+                            y=y_vals[in_view],
+                            mode="lines",
+                            name=label_name,
+                            line=dict(color=line_color, width=3, dash=dash_style),
+                        )
+                    )
+                else:
+                    out_of_bounds_msgs.append(
+                        f"ℹ️ **{label_name}**은(는) 모든 데이터를 한쪽(정상)으로 치우쳐 판별하기 때문에 현재 데이터 산점도 그림 범위 밖에 위치합니다."
+                    )
+            else:
+                out_of_bounds_msgs.append(
+                    f"ℹ️ **{label_name}**의 기울기가 수직에 가까워 그림 범위 밖에 위치합니다."
+                )
+
+        st.plotly_chart(fig2d, use_container_width=True)
+        for msg in out_of_bounds_msgs:
+            st.warning(msg)
+
+    else:
+        # 3개 이상 속성 선택 시: 앞 3개 속성을 축으로 하는 3D 산점도 + 전·후 0.5 결정 평면
+        f1_kor, f2_kor, f3_kor = selected_kor[0], selected_kor[1], selected_kor[2]
+        f1_eng, f2_eng, f3_eng = selected_eng[0], selected_eng[1], selected_eng[2]
+
         st.caption(
-            f"실제 사기 {cm[1].sum()}건 중 {cm[1][1]}건 탐지 (미탐 {cm[1][0]}건, 정상 오탐 {cm[0][1]}건). 임계값 슬라이더를 조절해 트레이드오프를 확인할 수 있습니다."
+            f"선택한 {len(selected_kor)}개 속성 중 앞의 3개(**{f1_kor}**, **{f2_kor}**, **{f3_kor}**)를 축으로 하는 3차원 공간입니다. 마우스로 드래그해 회전시켜 보세요."
         )
+
+        # 3개 축만으로 시각화용 3D 모델 별도 적합
+        m3d_before = LogisticRegression(class_weight=None, random_state=42).fit(
+            X_train_scaled[[f1_eng, f2_eng, f3_eng]], y_train
+        )
+        m3d_after = LogisticRegression(
+            class_weight="balanced", random_state=42
+        ).fit(X_train_scaled[[f1_eng, f2_eng, f3_eng]], y_train)
+
+        plot_3d = X_test_scaled[[f1_eng, f2_eng, f3_eng]].copy()
+        plot_3d["실제 사기 여부"] = y_test.map(
+            {0: "정상 거래 (0)", 1: "사기 거래 (1)"}
+        )
+
+        fig3d = px.scatter_3d(
+            plot_3d,
+            x=f1_eng,
+            y=f2_eng,
+            z=f3_eng,
+            color="실제 사기 여부",
+            color_discrete_map={
+                "정상 거래 (0)": "#4A90E2",
+                "사기 거래 (1)": "#E74C3C",
+            },
+            labels={
+                f1_eng: f1_kor,
+                f2_eng: f2_kor,
+                f3_eng: f3_kor,
+            },
+            title="3차원 산점도 및 가중치 보정 전·후 0.5 결정 평면",
+        )
+        fig3d.update_traces(marker=dict(size=4))
+
+        x_range = np.linspace(plot_3d[f1_eng].min(), plot_3d[f1_eng].max(), 20)
+        y_range = np.linspace(plot_3d[f2_eng].min(), plot_3d[f2_eng].max(), 20)
+        xx, yy = np.meshgrid(x_range, y_range)
+        z_min, z_max = plot_3d[f3_eng].min() - 1.0, plot_3d[f3_eng].max() + 1.0
+
+        plane_warnings = []
+        for m_obj, p_name, p_color in [
+            (m3d_before, "가중치 맞추기 전 0.5 평면", "Greens"),
+            (m3d_after, "가중치 맞춘 뒤 0.5 평면", "Oranges"),
+        ]:
+            w1, w2, w3 = m_obj.coef_[0]
+            b = m_obj.intercept_[0]
+            if abs(w3) > 1e-6:
+                zz = -(w1 * xx + w2 * yy + b) / w3
+                if np.all(zz < z_min) or np.all(zz > z_max):
+                    plane_warnings.append(
+                        f"ℹ️ **{p_name}**은(는) 한쪽 클래스로 판별이 치우쳐 현재 3차원 그래프 축 범위 밖에 위치합니다."
+                    )
+                else:
+                    zz_clipped = np.clip(zz, z_min, z_max)
+                    fig3d.add_trace(
+                        go.Surface(
+                            x=xx,
+                            y=yy,
+                            z=zz_clipped,
+                            name=p_name,
+                            showscale=False,
+                            opacity=0.35,
+                            colorscale=p_color,
+                        )
+                    )
+
+        fig3d.update_layout(height=650)
+        st.plotly_chart(fig3d, use_container_width=True)
+        for w_msg in plane_warnings:
+            st.warning(w_msg)
 
 # =========================================================
 # 페이지 4: 실시간 시뮬레이터
@@ -332,7 +455,7 @@ elif menu == "3. 로지스틱 회귀 학습 & 평가":
 elif menu == "4. 실시간 시뮬레이터":
     st.title("🚨 실시간 이상 금융거래 탐지 시뮬레이터")
     st.markdown(
-        "거래 데이터를 직접 조절하거나 **[실제 사기 예시 자동 입력]** 버튼을 눌러 로지스틱 회귀 모델의 사기 확률을 진단하세요."
+        "가중치 보정(`balanced`)이 적용된 **로지스틱 회귀(확률로 답하는 모델)**와 **의사결정나무(질문으로 답하는 모델)**로 실시간 사기 위험도를 진단합니다."
     )
 
     feature_cols = ["Hour", "V1", "V2", "V3", "V4", "V5", "Amount"]
@@ -342,8 +465,12 @@ elif menu == "4. 실시간 시뮬레이터":
     scaler = RobustScaler()
     X_all[["Hour", "Amount"]] = scaler.fit_transform(X_all[["Hour", "Amount"]])
 
-    sim_model = LogisticRegression(class_weight="balanced", random_state=42)
-    sim_model.fit(X_all, y_all)
+    lr_sim = LogisticRegression(class_weight="balanced", random_state=42).fit(
+        X_all, y_all
+    )
+    dt_sim = DecisionTreeClassifier(
+        max_depth=4, class_weight="balanced", random_state=42
+    ).fit(X_all, y_all)
 
     if "sim_hour" not in st.session_state:
         st.session_state.sim_hour = int(df["Hour"].median())
@@ -356,25 +483,23 @@ elif menu == "4. 실시간 시뮬레이터":
 
     btn_col1, btn_col2 = st.columns([1, 1])
     with btn_col1:
-        if (df["Class"] == 1).sum() > 0:
-            if st.button("🚨 실제 사기 거래 예시 값 자동 입력"):
-                # 모델이 사기로 가장 명확히 잡아내는 사기 샘플 자동 선택
-                fraud_df = df[df["Class"] == 1].copy()
-                fraud_scaled = fraud_df[feature_cols].copy()
-                fraud_scaled[["Hour", "Amount"]] = scaler.transform(
-                    fraud_scaled[["Hour", "Amount"]]
-                )
-                best_idx = np.argmax(sim_model.predict_proba(fraud_scaled)[:, 1])
-                fraud_sample = fraud_df.iloc[best_idx]
+        if st.button("🚨 실제 사기 거래 예시 값 자동 입력"):
+            fraud_df = df[df["Class"] == 1].copy()
+            fraud_scaled = fraud_df[feature_cols].copy()
+            fraud_scaled[["Hour", "Amount"]] = scaler.transform(
+                fraud_scaled[["Hour", "Amount"]]
+            )
+            best_idx = np.argmax(lr_sim.predict_proba(fraud_scaled)[:, 1])
+            fraud_sample = fraud_df.iloc[best_idx]
 
-                st.session_state.sim_hour = int(fraud_sample["Hour"])
-                st.session_state.sim_amount = float(fraud_sample["Amount"])
-                st.session_state.sim_v1 = float(fraud_sample["V1"])
-                st.session_state.sim_v2 = float(fraud_sample["V2"])
-                st.session_state.sim_v3 = float(fraud_sample["V3"])
-                st.session_state.sim_v4 = float(fraud_sample["V4"])
-                st.session_state.sim_v5 = float(fraud_sample["V5"])
-                st.rerun()
+            st.session_state.sim_hour = int(fraud_sample["Hour"])
+            st.session_state.sim_amount = float(fraud_sample["Amount"])
+            st.session_state.sim_v1 = float(fraud_sample["V1"])
+            st.session_state.sim_v2 = float(fraud_sample["V2"])
+            st.session_state.sim_v3 = float(fraud_sample["V3"])
+            st.session_state.sim_v4 = float(fraud_sample["V4"])
+            st.session_state.sim_v5 = float(fraud_sample["V5"])
+            st.rerun()
 
     with btn_col2:
         if st.button("🔄 일반 정상 거래 기본값으로 초기화"):
@@ -389,18 +514,13 @@ elif menu == "4. 실시간 시뮬레이터":
             st.rerun()
 
     st.divider()
-    st.subheader("1) 테스트할 결제 정보 입력")
-
     c1, c2, c3 = st.columns(3)
     with c1:
         in_hour = st.slider(
-            "결제 시간대 (Hour, 0시~23시)",
-            min_value=0,
-            max_value=23,
-            key="sim_hour",
+            "결제 시간대(0~23시)", min_value=0, max_value=23, key="sim_hour"
         )
         in_amount = st.number_input(
-            "결제 금액 (Amount)",
+            "결제 금액(Amount)",
             min_value=0.0,
             max_value=float(df["Amount"].max()),
             step=10.0,
@@ -408,32 +528,32 @@ elif menu == "4. 실시간 시뮬레이터":
         )
     with c2:
         in_v1 = st.slider(
-            "특성 변수 V1",
+            "거래 변동 패턴 V1",
             float(df["V1"].min()),
             float(df["V1"].max()),
             key="sim_v1",
         )
         in_v2 = st.slider(
-            "특성 변수 V2",
+            "거래 변동 패턴 V2",
             float(df["V2"].min()),
             float(df["V2"].max()),
             key="sim_v2",
         )
         in_v3 = st.slider(
-            "특성 변수 V3",
+            "거래 변동 패턴 V3",
             float(df["V3"].min()),
             float(df["V3"].max()),
             key="sim_v3",
         )
     with c3:
         in_v4 = st.slider(
-            "특성 변수 V4",
+            "거래 변동 패턴 V4",
             float(df["V4"].min()),
             float(df["V4"].max()),
             key="sim_v4",
         )
         in_v5 = st.slider(
-            "특성 변수 V5",
+            "거래 변동 패턴 V5",
             float(df["V5"].min()),
             float(df["V5"].max()),
             key="sim_v5",
@@ -445,26 +565,23 @@ elif menu == "4. 실시간 시뮬레이터":
             [[in_hour, in_v1, in_v2, in_v3, in_v4, in_v5, in_amount]],
             columns=feature_cols,
         )
-
         input_df[["Hour", "Amount"]] = scaler.transform(
             input_df[["Hour", "Amount"]]
         )
 
-        pred_proba = sim_model.predict_proba(input_df)[0][1] * 100
+        lr_prob = lr_sim.predict_proba(input_df)[0][1] * 100
+        dt_prob = dt_sim.predict_proba(input_df)[0][1] * 100
 
-        st.subheader("2) AI 보안 시스템 진단 결과")
-        if pred_proba >= 50.0:
-            st.error(
-                f"🚨 **[경고] 사기 의심 거래로 탐지되었습니다! (사기 위험 확률: {pred_proba:.1f}%)**"
-            )
-            st.markdown("""
-            * **조치 권고:** 비정상적인 결제 패턴이 감지되어 카드 승인을 일시 보류합니다.
-            * **후속 절차:** 카드 소유자 본인 확인을 위한 SMS 2차 인증 및 이상거래 대응팀(FDS) 모니터링이 필요합니다.
-            """)
-        else:
-            st.success(
-                f"✅ **[정상] 안전한 일반 결제 거래입니다. (사기 위험 확률: {pred_proba:.1f}%)**"
-            )
-            st.markdown("""
-            * **조치 권고:** 기존 정상 거래 패턴 범위 내에 있으므로 결제를 정상 승인합니다.
-            """)
+        r1, r2 = st.columns(2)
+        with r1:
+            st.subheader("로지스틱 회귀 (확률로 답하는 모델)")
+            if lr_prob >= 50.0:
+                st.error(f"🚨 사기 의심 탐지 (사기 확률: {lr_prob:.1f}%)")
+            else:
+                st.success(f"✅ 정상 거래 승인 (사기 확률: {lr_prob:.1f}%)")
+        with r2:
+            st.subheader("의사결정나무 (질문으로 답하는 모델)")
+            if dt_prob >= 50.0:
+                st.error(f"🚨 사기 의심 탐지 (사기 확률: {dt_prob:.1f}%)")
+            else:
+                st.success(f"✅ 정상 거래 승인 (사기 확률: {dt_prob:.1f}%)")
