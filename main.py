@@ -13,7 +13,6 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import RobustScaler
-from sklearn.tree import DecisionTreeClassifier
 import streamlit as st
 
 # ---------------------------------------------------------
@@ -211,7 +210,7 @@ if menu == "1. 프로젝트 개요":
             "구현 내용": [
                 "실생활 금융 보안(FDS) 이상 결제 탐지 문제 해결",
                 "Train/Test 분할 후 RobustScaler 적용 & Hour 파생변수 생성",
-                "로지스틱 회귀 & 의사결정나무 모델 동시 비교",
+                "로지스틱 회귀(확률로 답하는 모델) 적용",
                 "가중치 보정 전·후 Recall 비교 및 Plotly 2D/3D 경계 시각화",
                 "임계값 하향 조정을 통한 재현율 급상승 시연 및 현업 비교",
             ],
@@ -375,23 +374,12 @@ elif menu == "3. 성능 높이기 (가중치 전·후 비교)":
         return m_before, m_after, metrics_df, summary_text
 
     st.divider()
-    col_m1, col_m2 = st.columns(2)
-
-    with col_m1:
-        st.subheader("1) 로지스틱 회귀 (확률로 답하는 모델)")
-        lr_before, lr_after, lr_table, lr_summary = evaluate_before_after(
-            LogisticRegression
-        )
-        st.dataframe(lr_table, use_container_width=True, hide_index=True)
-        st.info(lr_summary)
-
-    with col_m2:
-        st.subheader("2) 의사결정나무 (질문으로 답하는 모델)")
-        dt_before, dt_after, dt_table, dt_summary = evaluate_before_after(
-            DecisionTreeClassifier, max_depth=4
-        )
-        st.dataframe(dt_table, use_container_width=True, hide_index=True)
-        st.info(dt_summary)
+    st.subheader("1) 로지스틱 회귀 (확률로 답하는 모델) 가중치 보정 전·후 비교")
+    lr_before, lr_after, lr_table, lr_summary = evaluate_before_after(
+        LogisticRegression
+    )
+    st.dataframe(lr_table, use_container_width=True, hide_index=True)
+    st.info(lr_summary)
 
     st.divider()
     st.subheader("📈 로지스틱 회귀(확률로 답하는 모델) 0.5 결정 경계 시각화")
@@ -529,7 +517,7 @@ elif menu == "3. 성능 높이기 (가중치 전·후 비교)":
 elif menu == "4. 실시간 시뮬레이터":
     st.title("🚨 실시간 이상 금융거래 탐지 시뮬레이터")
     st.markdown(
-        "가중치 보정(`balanced`)이 적용된 **로지스틱 회귀(확률로 답하는 모델)**와 **의사결정나무(질문으로 답하는 모델)**로 실시간 사기 위험 확률을 진단합니다."
+        "가중치 보정(`balanced`)이 적용된 **로지스틱 회귀(확률로 답하는 모델)**로 실시간 사기 위험 확률을 진단합니다."
     )
 
     sim_cols = [
@@ -544,9 +532,6 @@ elif menu == "4. 실시간 시뮬레이터":
     lr_sim = LogisticRegression(class_weight="balanced", random_state=42).fit(
         X_all, y_all
     )
-    dt_sim = DecisionTreeClassifier(
-        max_depth=4, class_weight="balanced", random_state=42
-    ).fit(X_all, y_all)
 
     for col in sim_cols:
         if f"sim_{col}" not in st.session_state:
@@ -612,21 +597,12 @@ elif menu == "4. 실시간 시뮬레이터":
         )
 
         lr_prob = lr_sim.predict_proba(input_df)[0][1] * 100
-        dt_prob = dt_sim.predict_proba(input_df)[0][1] * 100
 
-        r1, r2 = st.columns(2)
-        with r1:
-            st.subheader("로지스틱 회귀 (확률로 답하는 모델)")
-            if lr_prob >= 50.0:
-                st.error(f"🚨 사기 의심 탐지 (사기 확률: {lr_prob:.1f}%)")
-            else:
-                st.success(f"✅ 정상 거래 승인 (사기 확률: {lr_prob:.1f}%)")
-        with r2:
-            st.subheader("의사결정나무 (질문으로 답하는 모델)")
-            if dt_prob >= 50.0:
-                st.error(f"🚨 사기 의심 탐지 (사기 확률: {dt_prob:.1f}%)")
-            else:
-                st.success(f"✅ 정상 거래 승인 (사기 확률: {dt_prob:.1f}%)")
+        st.subheader("로지스틱 회귀 (확률로 답하는 모델) 진단 결과")
+        if lr_prob >= 50.0:
+            st.error(f"🚨 사기 의심 탐지 (사기 확률: {lr_prob:.1f}%)")
+        else:
+            st.success(f"✅ 정상 거래 승인 (사기 확률: {lr_prob:.1f}%)")
 
 # =========================================================
 # 페이지 5: 한계점 분석 & 실제 은행 FDS 비교 (임계값 하향 조정 시연 강화)
@@ -800,7 +776,7 @@ elif menu == "5. 한계점 & 실제 은행 FDS":
             ],
             "우리 프로젝트 모델 (학생 구현)": [
                 "핵심 변수 일부 + 시간(Hour), 금액(Amount)",
-                "단일 모델 (로지스틱 회귀, 의사결정나무)",
+                "단일 모델 (로지스틱 회귀)",
                 "기본 0.5에서 약 75% → 임계값 하향 시 87.5~100%",
                 "약 15~35% (변수 제약으로 오탐 발생)",
                 "단일 확률 판정 (오탐 시 차단 위험)",
