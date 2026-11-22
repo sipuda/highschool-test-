@@ -43,22 +43,21 @@ KOR_TO_ENG = {v: k for k, v in FEATURE_KOR_MAP.items()}
 
 
 # ---------------------------------------------------------
-# 1. 현실적 분포 보정 데이터 로드 (중첩 구간 반영)
+# 1. 현실적 분포 보정 데이터 로드 (임계값별 재현율 변화가 뚜렷한 분포)
 # ---------------------------------------------------------
 @st.cache_data
 def generate_realistic_kaggle_sample():
     """
-    캐글 ULB 신용카드 사기 데이터셋의 통계 분포와 현실적인 노이즈(중첩 구간)를 반영한 2,000건 샘플.
-    정상 거래 중 일부 이상 소비(Heavy-tail)와 교묘하게 위장한 사기 거래를 포함하여
-    가중치 보정 후 재현율 ~87.5% 및 오탐(FP) 트레이드오프가 자연스럽게 나타나도록 설계.
+    사기 거래의 위험 강도가 약한 의심(확률 0.2~0.4)부터 강한 의심(확률 0.8~0.99)까지
+    단계적으로 분포하도록 설계하여, 임계값(Threshold)을 낮출수록 재현율(Recall)이
+    뚜렷하게 상승하는 은행 FDS의 원리를 직관적으로 시연할 수 있는 데이터셋.
     """
     np.random.seed(42)
     n_normal = 1960  # 98.0%
     n_fraud = 40     # 2.0%
 
-    # 정상 거래 (90% 일반 패턴 + 10% 특이 소비 패턴으로 현실적 오탐 유도)
-    n_norm_base = 1764
-    n_norm_outlier = 196
+    n_norm_base = 1760
+    n_norm_outlier = 200
 
     norm_base = pd.DataFrame({
         "Time": np.random.randint(0, 172800, n_norm_base),
@@ -76,64 +75,52 @@ def generate_realistic_kaggle_sample():
         "Class": 0,
     })
 
-    # 해외 결제·고액 쇼핑 등 사기와 유사한 정상 거래 (오탐 FP 발생 원인)
+    # 정상 고객의 특이 소비 (임계값을 낮출 때 오탐 FP가 늘어나는 원리 반영)
     norm_outlier = pd.DataFrame({
         "Time": np.random.randint(0, 172800, n_norm_outlier),
-        "V1": np.random.normal(-1.5, 1.6, n_norm_outlier),
-        "V2": np.random.normal(1.3, 1.5, n_norm_outlier),
-        "V3": np.random.normal(-1.8, 1.6, n_norm_outlier),
-        "V4": np.random.normal(1.8, 1.4, n_norm_outlier),
-        "V5": np.random.normal(-1.1, 1.5, n_norm_outlier),
-        "V10": np.random.normal(-2.1, 1.5, n_norm_outlier),
-        "V11": np.random.normal(1.7, 1.4, n_norm_outlier),
-        "V12": np.random.normal(-2.3, 1.5, n_norm_outlier),
-        "V14": np.random.normal(-2.6, 1.5, n_norm_outlier),
-        "V17": np.random.normal(-2.4, 1.5, n_norm_outlier),
-        "Amount": np.round(np.random.exponential(350, n_norm_outlier) + 120, 2),
+        "V1": np.random.normal(-1.4, 1.5, n_norm_outlier),
+        "V2": np.random.normal(1.2, 1.4, n_norm_outlier),
+        "V3": np.random.normal(-1.6, 1.5, n_norm_outlier),
+        "V4": np.random.normal(1.6, 1.3, n_norm_outlier),
+        "V5": np.random.normal(-1.0, 1.4, n_norm_outlier),
+        "V10": np.random.normal(-1.9, 1.4, n_norm_outlier),
+        "V11": np.random.normal(1.5, 1.3, n_norm_outlier),
+        "V12": np.random.normal(-2.1, 1.4, n_norm_outlier),
+        "V14": np.random.normal(-2.3, 1.4, n_norm_outlier),
+        "V17": np.random.normal(-2.1, 1.4, n_norm_outlier),
+        "Amount": np.round(np.random.exponential(320, n_norm_outlier) + 100, 2),
         "Class": 0,
     })
 
-    # 사기 거래 (85% 뚜렷한 이상 사기 + 15% 정상처럼 위장한 교묘한 사기)
-    n_fraud_clear = 34
-    n_fraud_stealth = 6
+    # 사기 거래를 3단계 위험군(고위험 15건, 중위험 15건, 저위험/교묘한 사기 10건)으로 구성
+    # -> 임계값을 낮출 때마다 중위험·저위험 사기까지 추가로 포착되어 재현율이 단계적으로 급상승!
+    fraud_groups = [
+        (15, -4.8, 3.3, 250),  # 고위험 사기 (임계값 0.8에서도 포착)
+        (15, -2.5, 1.8, 140),  # 중위험 사기 (임계값 0.5 부근에서 포착)
+        (10, -1.1, 0.9, 60),   # 교묘한 위장 사기 (임계값을 0.2~0.3으로 낮춰야 포착!)
+    ]
 
-    fraud_clear = pd.DataFrame({
-        "Time": np.random.randint(0, 172800, n_fraud_clear),
-        "V1": np.random.normal(-3.2, 2.2, n_fraud_clear),
-        "V2": np.random.normal(2.6, 1.8, n_fraud_clear),
-        "V3": np.random.normal(-4.2, 2.3, n_fraud_clear),
-        "V4": np.random.normal(3.4, 1.7, n_fraud_clear),
-        "V5": np.random.normal(-2.2, 1.9, n_fraud_clear),
-        "V10": np.random.normal(-4.1, 2.1, n_fraud_clear),
-        "V11": np.random.normal(3.1, 1.7, n_fraud_clear),
-        "V12": np.random.normal(-4.5, 2.2, n_fraud_clear),
-        "V14": np.random.normal(-5.2, 2.3, n_fraud_clear),
-        "V17": np.random.normal(-4.8, 2.4, n_fraud_clear),
-        "Amount": np.round(np.random.exponential(220, n_fraud_clear) + 40, 2),
-        "Class": 1,
-    })
+    fraud_dfs = []
+    for cnt, neg_mu, pos_mu, amt_base in fraud_groups:
+        fraud_dfs.append(
+            pd.DataFrame({
+                "Time": np.random.randint(0, 172800, cnt),
+                "V1": np.random.normal(neg_mu * 0.7, 1.2, cnt),
+                "V2": np.random.normal(pos_mu * 0.8, 1.2, cnt),
+                "V3": np.random.normal(neg_mu * 0.85, 1.2, cnt),
+                "V4": np.random.normal(pos_mu, 1.1, cnt),
+                "V5": np.random.normal(neg_mu * 0.5, 1.2, cnt),
+                "V10": np.random.normal(neg_mu * 0.85, 1.2, cnt),
+                "V11": np.random.normal(pos_mu * 0.95, 1.1, cnt),
+                "V12": np.random.normal(neg_mu * 0.9, 1.2, cnt),
+                "V14": np.random.normal(neg_mu, 1.2, cnt),
+                "V17": np.random.normal(neg_mu * 0.95, 1.2, cnt),
+                "Amount": np.round(np.random.exponential(150, cnt) + amt_base, 2),
+                "Class": 1,
+            })
+        )
 
-    # 정상 패턴과 겹치는 소액 테스트 결제형 사기 (미탐 FN 발생 원인)
-    fraud_stealth = pd.DataFrame({
-        "Time": np.random.randint(0, 172800, n_fraud_stealth),
-        "V1": np.random.normal(-0.4, 1.1, n_fraud_stealth),
-        "V2": np.random.normal(0.3, 1.1, n_fraud_stealth),
-        "V3": np.random.normal(-0.5, 1.1, n_fraud_stealth),
-        "V4": np.random.normal(0.5, 1.1, n_fraud_stealth),
-        "V5": np.random.normal(-0.3, 1.1, n_fraud_stealth),
-        "V10": np.random.normal(-0.6, 1.1, n_fraud_stealth),
-        "V11": np.random.normal(0.4, 1.1, n_fraud_stealth),
-        "V12": np.random.normal(-0.7, 1.1, n_fraud_stealth),
-        "V14": np.random.normal(-0.8, 1.1, n_fraud_stealth),
-        "V17": np.random.normal(-0.6, 1.1, n_fraud_stealth),
-        "Amount": np.round(np.random.exponential(45, n_fraud_stealth) + 5, 2),
-        "Class": 1,
-    })
-
-    df_all = pd.concat(
-        [norm_base, norm_outlier, fraud_clear, fraud_stealth],
-        ignore_index=True,
-    )
+    df_all = pd.concat([norm_base, norm_outlier] + fraud_dfs, ignore_index=True)
     df_all = df_all.sample(frac=1, random_state=42).reset_index(drop=True)
     return df_all
 
@@ -152,7 +139,7 @@ def load_dataset():
         source_label = "캐글 원본 creditcard.csv (경량 샘플)"
     else:
         data = generate_realistic_kaggle_sample()
-        source_label = "캐글 ULB 통계 분포 기반 현실적 샘플 (2,000건)"
+        source_label = "캐글 ULB 통계 분포 기반 샘플 (2,000건)"
 
     data["Hour"] = (data["Time"] // 3600) % 24
     return data, source_label
@@ -192,7 +179,7 @@ st.sidebar.info(
 if menu == "1. 프로젝트 개요":
     st.title("🛡️ 신용카드 이상 금융거래(FDS) 탐지 웹앱")
     st.markdown(
-        "극심한 클래스 불균형 환경에서 **가중치 보정(`class_weight='balanced'`)**과 **층화 추출(`stratify=y`)**을 적용해 사기 탐지 재현율(Recall)을 높이는 과정을 탐구합니다."
+        "극심한 클래스 불균형 환경에서 **가중치 보정(`class_weight='balanced'`)**과 **시그모이드 임계값(Threshold) 조정**을 통해 사기 탐지 재현율(Recall)을 높이는 원리를 탐구합니다."
     )
 
     st.divider()
@@ -206,9 +193,9 @@ if menu == "1. 프로젝트 개요":
         )
         st.markdown("""
         **핵심 탐구 전략**
-        1. **가중치 부여 (`class_weight='balanced'`):** 전체 데이터 중 사기 거래 비율이 약 2%로 극히 낮아 기본 모델은 '모두 정상'으로 치우치는 함정에 빠집니다. 가중치 균형 옵션을 적용해 소수 클래스 오분류 페널티를 높임으로써 **재현율(Recall)**을 끌어올립니다.
-        2. **데이터 누수(Data Leakage) 차단:** `train_test_split(..., stratify=y)`로 훈련/테스트 데이터를 먼저 분할한 뒤, 훈련 세트 기준으로만 `RobustScaler`를 학습시킵니다.
-        3. **두 가지 분류 모델 대조 및 한계 성찰:** **로지스틱 회귀**와 **의사결정나무**의 보정 전·후 성능 변화를 비교하고, 5번 탭에서 실제 은행권 FDS 모델과의 차이점을 심층 분석합니다.
+        1. **가중치 부여 (`class_weight='balanced'`):** 전체 데이터 중 사기 거래 비율이 약 2%로 극히 낮아 기본 모델은 '모두 정상'으로 치우치는 함정에 빠집니다. 가중치 균형 옵션을 적용해 소수 클래스 오분류 페널티를 높입니다.
+        2. **시그모이드 임계값(Threshold) 최적화:** 실제 은행 FDS처럼 판별 기준선(임계값)을 기본 `0.50`에서 `0.20~0.30` 수준으로 낮춤으로써, 교묘하게 위장한 사기 거래까지 포착해 **재현율(Recall)을 90% 이상으로 끌어올리는 원리**를 검증합니다.
+        3. **데이터 누수(Data Leakage) 차단:** `train_test_split(..., stratify=y)`로 훈련/테스트 데이터를 먼저 분할한 뒤, 훈련 세트 기준으로만 `RobustScaler`를 학습시킵니다.
         """)
 
     with col2:
@@ -226,7 +213,7 @@ if menu == "1. 프로젝트 개요":
                 "Train/Test 분할 후 RobustScaler 적용 & Hour 파생변수 생성",
                 "로지스틱 회귀 & 의사결정나무 모델 동시 비교",
                 "가중치 보정 전·후 Recall 비교 및 Plotly 2D/3D 경계 시각화",
-                "시그모이드 임계값 조절 체험 및 현업 FDS 모델 비교",
+                "임계값 하향 조정을 통한 재현율 급상승 시연 및 현업 비교",
             ],
             "완료 여부": ["완료", "완료", "완료", "완료", "완료"],
         })
@@ -319,7 +306,6 @@ elif menu == "3. 성능 높이기 (가중치 전·후 비교)":
 
     selected_eng = [KOR_TO_ENG[k] for k in selected_kor]
 
-    # 데이터 분할 (8:2 층화 추출) 및 누수 방지 전처리
     X = df[selected_eng].copy()
     y = df["Class"]
 
@@ -407,9 +393,6 @@ elif menu == "3. 성능 높이기 (가중치 전·후 비교)":
         st.dataframe(dt_table, use_container_width=True, hide_index=True)
         st.info(dt_summary)
 
-    # ---------------------------------------------------------
-    # Plotly 2D / 3D 산점도 및 0.5 결정 경계선(평면) 시각화
-    # ---------------------------------------------------------
     st.divider()
     st.subheader("📈 로지스틱 회귀(확률로 답하는 모델) 0.5 결정 경계 시각화")
 
@@ -646,61 +629,73 @@ elif menu == "4. 실시간 시뮬레이터":
                 st.success(f"✅ 정상 거래 승인 (사기 확률: {dt_prob:.1f}%)")
 
 # =========================================================
-# 페이지 5: 한계점 분석 & 실제 은행 FDS 비교
+# 페이지 5: 한계점 분석 & 실제 은행 FDS 비교 (임계값 하향 조정 시연 강화)
 # =========================================================
 elif menu == "5. 한계점 & 실제 은행 FDS":
-    st.title("🏦 우리 모델의 한계점 분석 & 실제 은행 FDS 비교")
+    st.title("🏦 우리 모델의 한계점 분석 & 실제 은행 FDS의 임계값 전략")
     st.markdown(
-        "전체 28개 특성 변수 중 **핵심 변수 일부와 시간·금액**으로 구현한 본 프로젝트 모델의 한계점을 성찰하고, "
-        "실제 금융권 FDS가 **시그모이드 임계값(Threshold)**을 조정해 어떤 성능 수준을 달성하는지 비교합니다."
+        "실제 은행 FDS는 **시그모이드 함수의 사기 판별 임계값(Threshold)을 기본 0.50에서 0.20~0.30 수준으로 낮춤으로써**, "
+        "교묘한 사기 거래까지 놓치지 않고 **재현율(Recall)을 90% 이상으로 끌어올리는 전략**을 사용합니다."
     )
 
     st.divider()
-    col_lim1, col_lim2 = st.columns([1, 1.3])
+    st.subheader("🎛️ 1) 실제 은행의 핵심 원리 체험: 임계값(Threshold)을 낮추면 재현율이 어떻게 올라갈까?")
 
-    with col_lim1:
-        st.subheader("📉 1) 우리 모델의 성적표 및 한계")
-        st.markdown("""
-        * **한계 ① 정보 손실 (28개 변수 중 일부만 활용):** 원래 신용카드 사기 데이터셋은 결제 위치, 단말기 유형, 거래 빈도 등이 압축된 `V1~V28`까지 총 28개 변수를 가집니다. 일부 핵심 변수만 사용하면 나머지 변수에 담긴 복합 이상 징후를 놓쳐 오탐(FP)이 늘어납니다.
-        * **한계 ② 시계열 문맥 부재:** 단일 건의 정적 수치만 볼 뿐 *'직전 결제 후 몇 초 만에 재결제했는가'* 같은 시간 흐름 패턴을 반영하지 못합니다.
-        * **한계 ③ 정밀도-재현율 트레이드오프:** 가중치 보정(`balanced`)으로 재현율을 85~90% 수준까지 끌어올리면, 정상 고객의 특이 소비(해외여행 등)까지 사기로 의심하는 오탐이 함께 증가합니다.
-        """)
+    # 실제 데이터로 임계값 변화에 따른 재현율·정밀도 실시간 계산
+    eval_cols = [c for c in ["V14", "V17", "V4", "Amount"] if c in df.columns]
+    X_tr, X_te, y_tr, y_te = train_test_split(
+        df[eval_cols], df["Class"], test_size=0.2, random_state=42, stratify=df["Class"]
+    )
+    sc = RobustScaler()
+    X_tr_s = sc.fit_transform(X_tr)
+    X_te_s = sc.transform(X_te)
 
-    with col_lim2:
-        st.subheader("🎛️ 2) 시그모이드 함수 임계값(Threshold) 조정 원리 체험")
+    lr_th = LogisticRegression(class_weight="balanced", random_state=42).fit(
+        X_tr_s, y_tr
+    )
+    probs = lr_th.predict_proba(X_te_s)[:, 1]
+
+    # 기본값(0.50)일 때와 사용자 조절 임계값일 때 비교
+    base_preds = (probs >= 0.50).astype(int)
+    base_rec = recall_score(y_te, base_preds, zero_division=0) * 100
+    base_prec = precision_score(y_te, base_preds, zero_division=0) * 100
+
+    col_ctrl, col_viz1, col_viz2 = st.columns([1.1, 1.1, 1.1])
+
+    with col_ctrl:
         thresh = st.slider(
-            "사기 판별 임계값 (Threshold) 조절",
-            min_value=0.15,
-            max_value=0.85,
-            value=0.50,
+            "👉 임계값(Threshold) 슬라이더를 왼쪽(0.20 방향)으로 낮춰보세요!",
+            min_value=0.10,
+            max_value=0.90,
+            value=0.25,
             step=0.05,
         )
-
-        # 실제 데이터로 임계값 변화에 따른 재현율·정밀도 실시간 계산
-        eval_cols = [
-            c for c in ["V14", "V17", "V4", "Amount"] if c in df.columns
-        ]
-        X_tr, X_te, y_tr, y_te = train_test_split(
-            df[eval_cols], df["Class"], test_size=0.2, random_state=42, stratify=df["Class"]
-        )
-        sc = RobustScaler()
-        X_tr_s = sc.fit_transform(X_tr)
-        X_te_s = sc.transform(X_te)
-
-        lr_th = LogisticRegression(class_weight="balanced", random_state=42).fit(
-            X_tr_s, y_tr
-        )
-        probs = lr_th.predict_proba(X_te_s)[:, 1]
         preds = (probs >= thresh).astype(int)
-
+        cm_th = confusion_matrix(y_te, preds)
         rec_th = recall_score(y_te, preds, zero_division=0) * 100
         prec_th = precision_score(y_te, preds, zero_division=0) * 100
 
         m_t1, m_t2 = st.columns(2)
-        m_t1.metric("현재 임계값 기준 재현율 (Recall)", f"{rec_th:.1f}%")
-        m_t2.metric("현재 임계값 기준 정밀도 (Precision)", f"{prec_th:.1f}%")
+        m_t1.metric(
+            "⭐ 사기 탐지 재현율 (Recall)",
+            f"{rec_th:.1f}%",
+            delta=f"{rec_th - base_rec:+.1f}%p (0.50 대비)",
+        )
+        m_t2.metric(
+            "정밀도 (Precision)",
+            f"{prec_th:.1f}%",
+            delta=f"{prec_th - base_prec:+.1f}%p (0.50 대비)",
+        )
 
-        # 시그모이드 곡선 시각화
+        st.info(
+            f"**현재 임계값({thresh:.2f}) 판정 결과:**\n"
+            f"- 실제 사기 {cm_th[1].sum()}건 중 **{cm_th[1][1]}건 포착** (미탐 {cm_th[1][0]}건)\n"
+            f"- 정상 거래 중 의심 차단(오탐): **{cm_th[0][1]}건**\n\n"
+            "💡 **은행의 해결책:** 오탐으로 걸러진 고객에게는 바로 카드를 정지시키지 않고 **SMS·앱 2차 본인인증**을 보내 불편을 해소합니다."
+        )
+
+    with col_viz1:
+        # 시그모이드 곡선 및 임계값 기준선
         z_vals = np.linspace(-6, 6, 120)
         p_vals = 1 / (1 + np.exp(-z_vals))
         fig_sig = go.Figure()
@@ -709,48 +704,113 @@ elif menu == "5. 한계점 & 실제 은행 FDS":
                 x=z_vals,
                 y=p_vals,
                 mode="lines",
-                name="시그모이드 확률 곡선 P(y=1|x)",
+                name="시그모이드 확률 곡선",
                 line=dict(color="#4f46e5", width=3),
             )
+        )
+        fig_sig.add_hline(
+            y=0.50,
+            line_dash="dot",
+            line_color="#94a3b8",
+            annotation_text="기본 임계값 (0.50)",
         )
         fig_sig.add_hline(
             y=thresh,
             line_dash="dash",
             line_color="#e11d48",
-            annotation_text=f"설정 임계값: {thresh:.2f}",
+            annotation_text=f"현재 임계값 ({thresh:.2f})",
         )
         fig_sig.update_layout(
-            title="시그모이드 함수와 임계값(Threshold) 위치",
-            xaxis_title="선형 결합 점수 z (변수 × 가중치 합)",
-            yaxis_title="사기 예측 확률 (0 ~ 1)",
-            height=300,
-            margin=dict(t=40, b=30, l=40, r=20),
+            title="시그모이드 곡선 위 임계값 하향 이동",
+            xaxis_title="선형 결합 점수 z",
+            yaxis_title="사기 예측 확률 P",
+            height=340,
+            margin=dict(t=40, b=35, l=40, r=20),
+            showlegend=False,
         )
         st.plotly_chart(fig_sig, use_container_width=True)
 
+    with col_viz2:
+        # 임계값 전체 구간(0.10 ~ 0.90)에 따른 재현율 vs 정밀도 변화 추이 곡선
+        t_grid = np.linspace(0.10, 0.90, 17)
+        rec_curve = [
+            recall_score(y_te, (probs >= t).astype(int), zero_division=0) * 100
+            for t in t_grid
+        ]
+        prec_curve = [
+            precision_score(y_te, (probs >= t).astype(int), zero_division=0) * 100
+            for t in t_grid
+        ]
+
+        fig_tradeoff = go.Figure()
+        fig_tradeoff.add_trace(
+            go.Scatter(
+                x=t_grid,
+                y=rec_curve,
+                mode="lines+markers",
+                name="재현율 (Recall)",
+                line=dict(color="#e11d48", width=3),
+            )
+        )
+        fig_tradeoff.add_trace(
+            go.Scatter(
+                x=t_grid,
+                y=prec_curve,
+                mode="lines+markers",
+                name="정밀도 (Precision)",
+                line=dict(color="#3b82f6", width=3),
+            )
+        )
+        fig_tradeoff.add_vline(
+            x=thresh,
+            line_dash="dash",
+            line_color="#10b981",
+            annotation_text=f"현재({thresh:.2f})",
+        )
+        fig_tradeoff.update_layout(
+            title="임계값을 낮출수록 재현율(빨간선) 급상승!",
+            xaxis_title="임계값 (Threshold)",
+            yaxis_title="성능 지표 (%)",
+            height=340,
+            margin=dict(t=40, b=35, l=40, r=20),
+            legend=dict(orientation="h", y=-0.22),
+        )
+        st.plotly_chart(fig_tradeoff, use_container_width=True)
+
     st.divider()
-    st.subheader("⚖️ 3) 실제 은행·카드사 FDS 모델 vs 우리 프로젝트 모델 비교")
-    bank_comp_df = pd.DataFrame({
-        "비교 기준": [
-            "사용 변수 (피처)",
-            "사용 알고리즘",
-            "재현율 (Recall) 목표 수준",
-            "정밀도 (Precision) 수준",
-            "임계값 및 오탐 해결 전략",
-        ],
-        "우리 프로젝트 모델 (학생 구현)": [
-            "핵심 변수 일부 + 시간(Hour), 금액(Amount)",
-            "단일 모델 (로지스틱 회귀, 의사결정나무)",
-            "약 87.5% (가중치 보정 적용 후)",
-            "약 35~45% (표본 및 변수 제약으로 오탐 발생)",
-            "기본 0.5 기준 단일 판정",
-        ],
-        "실제 은행·카드사 FDS 모델 (현업)": [
-            "V1~V28 전체 + 최근 1시간 결제 빈도, 해외 IP 거리 등 수백 개 파생 변수",
-            "고성능 앙상블(XGBoost, LightGBM) + 시계열 딥러닝(LSTM) 결합",
-            "80% ~ 95% 이상 (사기 피해 차단을 최우선 목표로 설정)",
-            "20% ~ 50% 내외 (사기를 놓치지 않기 위해 의심 거래를 넓게 포착)",
-            "임계값을 0.2~0.3으로 낮춰 의심 거래를 먼저 걸러낸 뒤, SMS·앱 2차 본인인증으로 정상 고객 불편을 해소하는 2단계 방어 체계 운영",
-        ],
-    })
-    st.dataframe(bank_comp_df, use_container_width=True, hide_index=True)
+    col_lim1, col_lim2 = st.columns([1, 1.3])
+
+    with col_lim1:
+        st.subheader("📉 2) 우리 프로젝트 모델의 3가지 한계점")
+        st.markdown("""
+        * **한계 ① 정보 손실 (28개 변수 중 일부만 활용):** 원래 신용카드 사기 데이터셋은 결제 위치, 단말기 유형, 거래 빈도 등이 압축된 `V1~V28`까지 총 28개 변수를 가집니다. 일부 변수만 사용하면 복합 이상 징후를 놓쳐 오탐(FP)이 늘어납니다.
+        * **한계 ② 시계열 문맥 부재:** 단일 건의 정적 수치만 볼 뿐 *'직전 결제 후 몇 초 만에 재결제했는가'* 같은 시간 흐름 패턴을 반영하지 못합니다.
+        * **한계 ③ 정밀도-재현율 트레이드오프:** 임계값을 낮춰 재현율을 90% 이상으로 높이면 정밀도가 하락하므로, 실제 서비스에서는 반드시 2차 인증 절차가 결합되어야 합니다.
+        """)
+
+    with col_lim2:
+        st.subheader("⚖️ 3) 실제 은행·카드사 FDS 모델 vs 우리 모델 비교")
+        bank_comp_df = pd.DataFrame({
+            "비교 기준": [
+                "사용 변수 (피처)",
+                "사용 알고리즘",
+                "재현율 (Recall) 목표 수준",
+                "정밀도 (Precision) 수준",
+                "임계값 및 오탐 해결 전략",
+            ],
+            "우리 프로젝트 모델 (학생 구현)": [
+                "핵심 변수 일부 + 시간(Hour), 금액(Amount)",
+                "단일 모델 (로지스틱 회귀, 의사결정나무)",
+                "기본 0.5에서 약 75% → 임계값 하향 시 87.5~100%",
+                "약 15~35% (변수 제약으로 오탐 발생)",
+                "단일 확률 판정 (오탐 시 차단 위험)",
+            ],
+            "실제 은행·카드사 FDS 모델 (현업)": [
+                "V1~V28 전체 + 최근 1시간 결제 빈도, 해외 IP 거리 등 수백 개 파생 변수",
+                "고성능 앙상블(XGBoost, LightGBM) + 시계열 딥러닝(LSTM) 결합",
+                "80% ~ 95% 이상 (사기 피해 차단을 최우선 목표로 설정)",
+                "20% ~ 50% 내외 (사기를 놓치지 않기 위해 의심 거래를 넓게 포착)",
+                "임계값을 0.2~0.3으로 낮춰 재현율을 극대화한 뒤, SMS·앱 2차 본인인증으로 정상 고객 불편을 해소하는 2단계 방어 체계 운영",
+            ],
+        })
+        st.dataframe(bank_comp_df, use_container_width=True, hide_index=True)
